@@ -7,11 +7,19 @@ using UnityEngine.InputSystem;
 /// for Unity's arcade physics. Keeping it in one place means the cockpit
 /// feels the same whichever mode is driving the boat.
 ///
-/// Keyboard:  W/S throttle, A/D bank, Up/Down flying height
-/// Gamepad:   left stick Y throttle, right stick X bank, D-pad up/down height
+/// Keyboard:  W/S throttle, A/D bank, Up/Down flying height,
+///            E arm/disarm, hold Space = deadman
+/// Gamepad:   left stick Y throttle, right stick X bank, D-pad up/down height,
+///            Start arm/disarm, hold right shoulder = deadman
 ///
-/// All three values are targets for the autopilot (heave, surge, roll PIDs
-/// in Python), not direct force commands.
+/// Height, throttle and bank are targets for the autopilot (heave, surge,
+/// roll PIDs in Python), not direct force commands.
+///
+/// Safety: throttle only reaches the boat while armed and the deadman is held.
+/// Arming needs the throttle lever at zero (and the deadman held), so the
+/// boat can't lurch off the moment it's armed. Letting go of the deadman
+/// disarms, like a kill-cord lanyard. Both checks can be switched off in the
+/// Inspector for bench testing.
 /// </summary>
 public class PilotInput : MonoBehaviour
 {
@@ -30,6 +38,13 @@ public class PilotInput : MonoBehaviour
     public const float BANK_MIN = -8.0f;
     public const float BANK_MAX = 8.0f;
     public const float BANK_RETURN_RATE = 10.0f;  // deg/s bank relaxes toward 0 when A/D released
+    public const float ARM_MAX_SPEED = 0.05f;  // lever must be at (about) zero to arm
+
+    [Header("Safety")]
+    [Tooltip("Throttle is held at zero until the pilot arms (E / gamepad Start).")]
+    public bool requireArming = true;
+    [Tooltip("Throttle needs the deadman held (Space / gamepad right shoulder); releasing it disarms.")]
+    public bool requireDeadman = true;
 
     [Header("Gamepad")]
     [Tooltip("Stick values below this are treated as centred.")]
@@ -37,8 +52,11 @@ public class PilotInput : MonoBehaviour
 
     [Header("Pilot State (read-only)")]
     [SerializeField] private float _flyingHeight = 0.55f;
-    [SerializeField] private float _targetSpeed = 4.0f;
+    [SerializeField] private float _targetSpeed = 0.0f;
     [SerializeField] private float _phiRef = 0.0f;
+    [SerializeField] private bool _armed;
+    [SerializeField] private bool _deadmanHeld;
+    [SerializeField] private string _status = "Disarmed";
 
     /// <summary>Commanded ride height for the heave PID [m].</summary>
     public float FlyingHeight => _flyingHeight;
@@ -51,11 +69,24 @@ public class PilotInput : MonoBehaviour
     /// <summary>Bank command normalised to -1..1.</summary>
     public float Steer01 => _phiRef / BANK_MAX;
 
+    public bool Armed => _armed;
+    public bool DeadmanHeld => _deadmanHeld;
+    /// <summary>Short human-readable arming state, e.g. why the last arm attempt was refused.</summary>
+    public string Status => _status;
+    /// <summary>True when throttle is allowed through to the boat.</summary>
+    public bool ThrottleEnabled => (!requireArming || _armed) && (!requireDeadman || _deadmanHeld);
+    /// <summary>Speed actually commanded: the lever, or zero when throttle is cut [m/s].</summary>
+    public float CommandedSpeed => ThrottleEnabled ? _targetSpeed : 0f;
+    /// <summary>CommandedSpeed normalised to 0..1.</summary>
+    public float CommandedThrottle01 => ThrottleEnabled ? Throttle01 : 0f;
+
     void Update()
     {
         var kb = Keyboard.current;
         var pad = Gamepad.current;
         float dt = Time.deltaTime;
+
+        UpdateSafety(kb, pad);
 
         // Climb/dive: holds like a lever (no spring-back).
         float heightAxis = 0f;
@@ -90,6 +121,39 @@ public class PilotInput : MonoBehaviour
         else
         {
             _phiRef = Mathf.MoveTowards(_phiRef, 0f, BANK_RETURN_RATE * dt);
+        }
+    }
+
+    void UpdateSafety(Keyboard kb, Gamepad pad)
+    {
+        _deadmanHeld = (kb != null && kb.spaceKey.isPressed) || (pad != null && pad.rightShoulder.isPressed);
+
+        if (_armed && requireDeadman && !_deadmanHeld)
+        {
+            _armed = false;
+            _status = "Disarmed: deadman released";
+        }
+
+        bool armToggle = (kb != null && kb.eKey.wasPressedThisFrame) || (pad != null && pad.startButton.wasPressedThisFrame);
+        if (!armToggle) return;
+
+        if (_armed)
+        {
+            _armed = false;
+            _status = "Disarmed";
+        }
+        else if (_targetSpeed > ARM_MAX_SPEED)
+        {
+            _status = "Can't arm: bring throttle to zero";
+        }
+        else if (requireDeadman && !_deadmanHeld)
+        {
+            _status = "Can't arm: hold the deadman";
+        }
+        else
+        {
+            _armed = true;
+            _status = "Armed";
         }
     }
 
