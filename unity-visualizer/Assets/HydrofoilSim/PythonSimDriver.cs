@@ -198,9 +198,15 @@ public class PythonSimDriver : MonoBehaviour
         try
         {
             var inv = System.Globalization.CultureInfo.InvariantCulture;
+            // target_speed is gated by arm/deadman (0 when cut), so the cut works
+            // with today's Python. "armed"/"deadman" are extra keys that
+            // control_uplink.py ignores for now; they're there for a future
+            // Python-side failsafe (e.g. a thrust ramp-down).
             string json = $"{{\"flying_height\":{pilot.FlyingHeight.ToString(inv)}," +
-                          $"\"target_speed\":{pilot.TargetSpeed.ToString(inv)}," +
-                          $"\"phi_ref\":{pilot.PhiRef.ToString(inv)}}}";
+                          $"\"target_speed\":{pilot.CommandedSpeed.ToString(inv)}," +
+                          $"\"phi_ref\":{pilot.PhiRef.ToString(inv)}," +
+                          $"\"armed\":{(pilot.Armed ? "true" : "false")}," +
+                          $"\"deadman\":{(pilot.DeadmanHeld ? "true" : "false")}}}";
             byte[] data = Encoding.UTF8.GetBytes(json);
             _udp.Send(data, data.Length, pythonHost, pilotPort);
         }
