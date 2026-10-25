@@ -32,8 +32,11 @@ public class PythonSimDriver : MonoBehaviour
     public int port = 5005;
 
     [Header("Pilot Input (climb/dive, sent back to Python)")]
-    [Tooltip("Enable W/S or Up/Down to control flying height from inside Unity")]
+    [Tooltip("Send the PilotInput stick state (height, throttle, bank) back to Python")]
     public bool pilotInputEnabled = true;
+    [Tooltip("Where the stick state comes from. Left empty, the first PilotInput in the scene " +
+             "is used, or one is added to this GameObject.")]
+    public PilotInput pilot;
     public string pythonHost = "127.0.0.1";
     public int pilotPort = 5006;
 
@@ -77,11 +80,6 @@ public class PythonSimDriver : MonoBehaviour
     [SerializeField] private float _waveElev;
     [SerializeField] private int   _packetsReceived;
 
-    [Header("Pilot State (read-only)")]
-    [SerializeField] private float _flyingHeight = 0.55f;
-    [SerializeField] private float _targetSpeed = 4.0f;
-    [SerializeField] private float _phiRefTarget = 0.0f;
-
     // ── Threading ─────────────────────────────────────────────────────────
     private UdpClient       _udp;
     private Thread          _thread;
@@ -105,24 +103,10 @@ public class PythonSimDriver : MonoBehaviour
         public float wave_elev;         // wave surface elevation at the vehicle's position [m]
     }
 
-    // Climb/dive + throttle + bank pilot stick, sent back to Python. All three
-    // are targets fed to the existing PIDs (heave, surge, roll) running
-    // server-side — this is a stick into an autopilot, not direct force
-    // control. Height/speed match dashboard.py's manualControlTick() feel.
-    private const float HEIGHT_RATE = 0.15f;
-    private const float HEIGHT_MIN = -0.3f;
-    private const float HEIGHT_MAX = 1.0f;
-    private const float SPEED_RATE = 1.0f;      // m/s of target per second held
-    private const float SPEED_MIN = 0.0f;       // 0 = no lift possible — this is how you feel gravity win
-    private const float SPEED_MAX = 10.0f;
-    // Bank range is deliberately tight — the roll PID (server-side) is only
-    // verified stable for a commanded bank up to ~10 deg; 12 deg reliably
-    // diverges (see control_uplink.py's BANK_MIN/MAX docstring). Don't widen
-    // this without re-verifying there too.
-    private const float BANK_RATE = 6.0f;       // deg of target per second held
-    private const float BANK_MIN = -8.0f;
-    private const float BANK_MAX = 8.0f;
-    private const float BANK_RETURN_RATE = 10.0f;  // deg/s bank relaxes toward 0 when A/D released
+    // Climb/dive + throttle + bank pilot stick (from PilotInput), sent back to
+    // Python. All three are targets fed to the existing PIDs (heave, surge,
+    // roll) running server-side — this is a stick into an autopilot, not
+    // direct force control.
     private const float PILOT_SEND_INTERVAL = 0.05f;   // ~20Hz, matches the dashboard's throttle
     private float _pilotSendTimer;
 
@@ -145,6 +129,9 @@ public class PythonSimDriver : MonoBehaviour
             var modeController = shipTransform.GetComponent<SimModeController>();
             if (modeController != null) modeController.SetMode(SimModeController.Mode.PythonDriven);
         }
+
+        if (pilot == null) pilot = FindFirstObjectByType<PilotInput>();
+        if (pilot == null) pilot = gameObject.AddComponent<PilotInput>();
 
         _udp     = new UdpClient(new IPEndPoint(IPAddress.Any, port));
         _udp.Client.ReceiveTimeout = 500;
@@ -199,49 +186,11 @@ public class PythonSimDriver : MonoBehaviour
             _packetsReceived++;
         }
 
-        if (pilotInputEnabled) PollPilotInput();
+        if (pilotInputEnabled) SendPilotInput();
     }
 
-    void PollPilotInput()
+    void SendPilotInput()
     {
-        // Climb/dive: Up/Down arrows only. Holds like a lever (no spring-back).
-        bool up   = Input.GetKey(KeyCode.UpArrow);
-        bool down = Input.GetKey(KeyCode.DownArrow);
-        if (up != down)
-        {
-            float delta = HEIGHT_RATE * Time.deltaTime * (up ? 1f : -1f);
-            _flyingHeight = Mathf.Clamp(_flyingHeight + delta, HEIGHT_MIN, HEIGHT_MAX);
-        }
-
-        // Throttle: W = more speed, S = less. Holds like a real lever (no
-        // spring-back to a default) — at SPEED_MIN there's no lift available
-        // at all, so the heave PID can't hold height and the hull sinks back
-        // into the water under gravity, same as the real thing.
-        bool faster = Input.GetKey(KeyCode.W);
-        bool slower = Input.GetKey(KeyCode.S);
-        if (faster != slower)
-        {
-            float delta = SPEED_RATE * Time.deltaTime * (faster ? 1f : -1f);
-            _targetSpeed = Mathf.Clamp(_targetSpeed + delta, SPEED_MIN, SPEED_MAX);
-        }
-
-        // Turn: A = bank left (negative phi_ref), D = bank right (positive),
-        // matching phi's sign convention (+ve = rolled right — see pid.py).
-        // Unlike height/speed this is spring-centered: release both keys and
-        // it relaxes back to 0 rather than holding, like a self-centering
-        // stick. Clamped tight (+-8 deg) — see the BANK_MIN/MAX comment above.
-        bool bankRight = Input.GetKey(KeyCode.D);
-        bool bankLeft  = Input.GetKey(KeyCode.A);
-        if (bankRight != bankLeft)
-        {
-            float delta = BANK_RATE * Time.deltaTime * (bankRight ? 1f : -1f);
-            _phiRefTarget = Mathf.Clamp(_phiRefTarget + delta, BANK_MIN, BANK_MAX);
-        }
-        else
-        {
-            _phiRefTarget = Mathf.MoveTowards(_phiRefTarget, 0f, BANK_RETURN_RATE * Time.deltaTime);
-        }
-
         _pilotSendTimer += Time.deltaTime;
         if (_pilotSendTimer < PILOT_SEND_INTERVAL) return;
         _pilotSendTimer = 0f;
@@ -249,9 +198,9 @@ public class PythonSimDriver : MonoBehaviour
         try
         {
             var inv = System.Globalization.CultureInfo.InvariantCulture;
-            string json = $"{{\"flying_height\":{_flyingHeight.ToString(inv)}," +
-                          $"\"target_speed\":{_targetSpeed.ToString(inv)}," +
-                          $"\"phi_ref\":{_phiRefTarget.ToString(inv)}}}";
+            string json = $"{{\"flying_height\":{pilot.FlyingHeight.ToString(inv)}," +
+                          $"\"target_speed\":{pilot.TargetSpeed.ToString(inv)}," +
+                          $"\"phi_ref\":{pilot.PhiRef.ToString(inv)}}}";
             byte[] data = Encoding.UTF8.GetBytes(json);
             _udp.Send(data, data.Length, pythonHost, pilotPort);
         }
