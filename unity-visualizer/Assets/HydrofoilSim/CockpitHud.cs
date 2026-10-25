@@ -39,6 +39,8 @@ public class CockpitHud : MonoBehaviour
         GUILayout.BeginArea(new Rect(margin, margin, w, Screen.height - 2 * margin));
         GUILayout.BeginVertical(GUI.skin.box);
         DrawPilotPanel();
+        GUILayout.Space(6);
+        DrawTelemetryPanel();
         GUILayout.EndVertical();
         GUILayout.EndArea();
     }
@@ -68,6 +70,54 @@ public class CockpitHud : MonoBehaviour
         GUILayout.Space(4);
         GUILayout.Label("Hold Space (deadman) + E to arm\nW/S throttle   A/D bank   ↑/↓ height\nPad: RB deadman, Start arm, sticks", _hint);
     }
+
+    void DrawTelemetryPanel()
+    {
+        if (_mode == null) _mode = FindFirstObjectByType<SimModeController>();
+        if (_mode == null)
+        {
+            GUILayout.Label("No boat (SimModeController) in scene", _label);
+            return;
+        }
+
+        if (_mode.CurrentMode == SimModeController.Mode.PythonDriven)
+        {
+            if (_python == null) _python = FindFirstObjectByType<PythonSimDriver>();
+            GUILayout.Label("Boat (Python sim)", _title);
+            if (_python == null) { GUILayout.Label("No PythonSimDriver in scene", _label); return; }
+
+            float age = _python.SecondsSinceLastPacket;
+            string link = _python.PacketsReceived == 0 ? "NO DATA - is sim_realtime running?"
+                        : age > 0.5f ? $"STALE ({age:F1}s since last packet)"
+                        : $"OK ({_python.PacketsReceived} packets)";
+            Row("Link", link);
+            Row("Speed", $"{_python.Speed,5:F2} m/s");
+            Row("Pitch", $"{_python.PitchDeg,5:F1}°");
+            Row("Roll", $"{_python.RollDeg,5:F1}°");
+            Row("Hull draft", $"{_python.Draft,5:F2} m");
+            Row("Foilborne", _python.Foilborne ? "YES" : "no");
+            Row("Thrust", $"{_python.Thrust,5:F0} N");
+        }
+        else
+        {
+            // Arcade: Unity's own Rigidbody physics. Boat forward is local +X
+            // (the motors' thrust axis).
+            if (_body == null) _body = _mode.GetComponent<Rigidbody>();
+            if (_water == null) { var f = FindFirstObjectByType<Floater>(); if (f != null) _water = f.waterPlane; }
+            GUILayout.Label("Boat (Unity arcade physics)", _title);
+            if (_body == null) { GUILayout.Label("No Rigidbody on the boat", _label); return; }
+
+            Vector3 v = _body.linearVelocity;
+            Row("Speed", $"{new Vector3(v.x, 0f, v.z).magnitude,5:F2} m/s");
+            Row("Forward speed", $"{Vector3.Dot(v, _body.transform.right),5:F2} m/s");
+            if (_water != null) Row("Height above water", $"{_body.position.y - _water.position.y,5:F2} m");
+        }
+    }
+
+    private SimModeController _mode;
+    private PythonSimDriver _python;
+    private Rigidbody _body;
+    private Transform _water;
 
     void Row(string name, string value)
     {
