@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Generated sim output (plots/animations from sim.py runs) — regenerate, don't track
+data/
+
+# Unity (defensive — unity-visualizer/ only ever holds the trimmed project,
+# but these keep caches/local settings out if someone syncs the full project here)
+unity-visualizer/Library/
+unity-visualizer/Temp/
+unity-visualizer/Obj/
+unity-visualizer/Logs/
+unity-visualizer/UserSettings/
+unity-visualizer/.vs/
+unity-visualizer/*.csproj
+unity-visualizer/*.sln
+unity-visualizer/*.slnx
+unity-visualizer/.vsconfig
+
+# The boat hull model is 709MB — over GitHub's 100MB file limit, excluded on
+# purpose. Jacob sends this file separately; drop it in at the path below.
+unity-visualizer/Assets/Foil/Mockup4_JacobRig_Merged.blend
