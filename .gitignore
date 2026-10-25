@@ -4,7 +4,10 @@ __pycache__/
 .pytest_cache/
 
 # Generated sim output (plots/animations from sim.py runs) — regenerate, don't track
-data/
+# but keep data/foil_tables/, which holds required input (foil polar data)
+data/*
+!data/foil_tables/
+!data/foil_tables/**
 
 # Unity (defensive — unity-visualizer/ only ever holds the trimmed project,
 # but these keep caches/local settings out if someone syncs the full project here)
