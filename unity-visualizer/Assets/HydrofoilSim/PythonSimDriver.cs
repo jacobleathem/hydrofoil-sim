@@ -80,6 +80,24 @@ public class PythonSimDriver : MonoBehaviour
     [SerializeField] private float _waveElev;
     [SerializeField] private int   _packetsReceived;
 
+    // Read-only access for the cockpit HUD.
+    public float SimTime => _time;
+    public float DepthNed => _depth;          // NED z [m], negative = above the reference
+    public float PitchDeg => _pitchDeg;
+    public float RollDeg => _rollDeg;
+    public float Speed => _speed;             // body-forward u [m/s]
+    public float DeltaMain => _deltaMain;
+    public float DeltaElev => _deltaElev;
+    public float DeltaRoll => _deltaRoll;
+    public float Thrust => _thrust;
+    public float Draft => _draft;
+    public bool  Foilborne => _foilborne;
+    public float WaveElev => _waveElev;
+    public int   PacketsReceived => _packetsReceived;
+    /// <summary>Real seconds since the last state packet arrived (infinity if none yet).</summary>
+    public float SecondsSinceLastPacket => _packetsReceived == 0 ? float.PositiveInfinity : Time.realtimeSinceStartup - _lastPacketRealtime;
+    private float _lastPacketRealtime;
+
     // ── Threading ─────────────────────────────────────────────────────────
     private UdpClient       _udp;
     private Thread          _thread;
@@ -184,6 +202,7 @@ public class PythonSimDriver : MonoBehaviour
             ApplyToScene(p);
             UpdateInspector(p);
             _packetsReceived++;
+            _lastPacketRealtime = Time.realtimeSinceStartup;
         }
 
         if (pilotInputEnabled) SendPilotInput();
