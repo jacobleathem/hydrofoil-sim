@@ -33,6 +33,14 @@ public class TwinMotorController : MonoBehaviour
 	[Tooltip("How fast the yaw rate follows the stick [1/s].")]
 	public float yawResponse = 8f;
 
+	[Header("Banking")]
+	[Tooltip("Lean into the turn at full steer and full speed [deg]. Scales with how hard and how fast you turn.")]
+	public float maxBankAngle = 12f;
+	[Tooltip("How fast the lean follows the turn [1/s].")]
+	public float bankResponse = 5f;
+	[Tooltip("Share of the lean the onboard camera follows. 0 keeps the horizon level, 1 leans fully with the hull.")]
+	[Range(0f, 1f)] public float cameraBankShare = 0.5f;
+
 	[Header("Pilot")]
 	[Tooltip("Stick state source. Left empty, the first PilotInput in the scene is used, or one is added here.")]
 	public PilotInput pilot;
@@ -41,6 +49,10 @@ public class TwinMotorController : MonoBehaviour
 	Vector3 Forward => transform.right;
 
 	float yawRate; // deg/s, current turn rate
+	float heading; // deg about world up
+	float bank;    // deg about the hull's long axis, +ve = leaning right
+	Transform cam;
+	Quaternion camBaseRotation;
 
 	void Start()
 	{
@@ -63,6 +75,15 @@ public class TwinMotorController : MonoBehaviour
 		rb.constraints = RigidbodyConstraints.FreezeRotation;
 		rb.angularVelocity = Vector3.zero;
 		yawRate = 0f;
+		heading = rb.rotation.eulerAngles.y;
+		bank = 0f;
+
+		var camera = rb.GetComponentInChildren<Camera>();
+		if (camera != null)
+		{
+			cam = camera.transform;
+			camBaseRotation = cam.localRotation;
+		}
 
 		ResolvePilot();
 		pilot.throttleRate = (PilotInput.SPEED_MAX - PilotInput.SPEED_MIN) / Mathf.Max(0.1f, leverSweepTime);
@@ -71,6 +92,7 @@ public class TwinMotorController : MonoBehaviour
 	void OnDisable()
 	{
 		if (pilot != null) pilot.throttleRate = PilotInput.SPEED_RATE;
+		if (cam != null) cam.localRotation = camBaseRotation;
 	}
 
 	void FixedUpdate()
@@ -107,9 +129,21 @@ public class TwinMotorController : MonoBehaviour
 		float speedFactor = Mathf.Lerp(lowSpeedTurn, 1f, Mathf.Clamp01(Mathf.Abs(vForward) / topSpeed));
 		float targetYaw = steer * maxYawRate * speedFactor * (vForward < -0.1f ? -1f : 1f);
 		yawRate = Mathf.Lerp(yawRate, targetYaw, Mathf.Clamp01(yawResponse * Time.fixedDeltaTime));
-		rb.MoveRotation(Quaternion.AngleAxis(yawRate * Time.fixedDeltaTime, Vector3.up) * rb.rotation);
+		heading += yawRate * Time.fixedDeltaTime;
 
-		// 5. Calculate Forward Velocity for Simulink
+		// 5. Bank into the turn, scaled by the cornering load (speed x turn
+		// rate) so a gentle or slow turn barely leans and a hard one at speed
+		// leans the full maxBankAngle. Purely visual: physics never tilts it.
+		float load = vForward * yawRate / (topSpeed * maxYawRate);
+		float targetBank = Mathf.Clamp(load, -1f, 1f) * maxBankAngle;
+		bank = Mathf.Lerp(bank, targetBank, Mathf.Clamp01(bankResponse * Time.fixedDeltaTime));
+
+		// The long axis is local +X; a negative turn about it drops the right side.
+		rb.MoveRotation(Quaternion.Euler(0f, heading, 0f) * Quaternion.AngleAxis(-bank, Vector3.right));
+		if (cam != null)
+			cam.localRotation = Quaternion.AngleAxis(bank * (1f - cameraBankShare), Vector3.right) * camBaseRotation;
+
+		// 6. Calculate Forward Velocity for Simulink
 		currentSpeed = vForward;
 	}
 }
