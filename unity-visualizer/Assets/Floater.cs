@@ -16,10 +16,8 @@ public class Floater : MonoBehaviour
 
 		if (transform.position.y < waterLevel) // if boat is underwater (speed low)
         {
-            Debug.Log("Underwater");
             float displacementMultiplyer = Mathf.Clamp01(waterLevel - transform.position.y);
 			Vector3 buoyancyForce = new Vector3(0f, displacementMultiplyer * waterDensity * floatingThreshold * Mathf.Abs(Physics.gravity.y), 0f);
-			Debug.Log(buoyancyForce);
 			foilBody.AddForceAtPosition(buoyancyForce, transform.position, ForceMode.Acceleration);
 
 			foilBody.AddForce(Vector3.up * -foilBody.linearVelocity.y * waterDrag, ForceMode.VelocityChange);
