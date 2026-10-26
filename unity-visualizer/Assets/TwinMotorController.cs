@@ -15,11 +15,15 @@ public class TwinMotorController : MonoBehaviour
 
 	[Header("Water Drag")]
 	[Tooltip("Speed reached at full throttle [m/s]. Forward drag is quadratic and tuned so it balances maxThrust here.")]
-	public float topSpeed = 10f;
+	public float topSpeed = 20f;
 	[Tooltip("Sideways drag as a multiple of forward drag. High = boat carves instead of sliding through turns.")]
 	public float lateralDragFactor = 20f;
 	[Tooltip("Linear drag on every axis [1/s], so the boat coasts to a stop with the throttle off.")]
 	public float linearDrag = 0.3f;
+
+	[Header("Throttle")]
+	[Tooltip("Seconds to push the lever from zero to full (or back) while W/S are held. Python mode keeps PilotInput's own, slower rate.")]
+	public float leverSweepTime = 1.5f;
 
 	[Header("Turning")]
 	[Tooltip("Yaw rate at full steer and full speed [deg/s].")]
@@ -40,6 +44,11 @@ public class TwinMotorController : MonoBehaviour
 
 	void Start()
 	{
+		ResolvePilot();
+	}
+
+	void ResolvePilot()
+	{
 		if (pilot == null) pilot = FindFirstObjectByType<PilotInput>();
 		if (pilot == null) pilot = gameObject.AddComponent<PilotInput>();
 	}
@@ -54,6 +63,14 @@ public class TwinMotorController : MonoBehaviour
 		rb.constraints = RigidbodyConstraints.FreezeRotation;
 		rb.angularVelocity = Vector3.zero;
 		yawRate = 0f;
+
+		ResolvePilot();
+		pilot.throttleRate = (PilotInput.SPEED_MAX - PilotInput.SPEED_MIN) / Mathf.Max(0.1f, leverSweepTime);
+	}
+
+	void OnDisable()
+	{
+		if (pilot != null) pilot.throttleRate = PilotInput.SPEED_RATE;
 	}
 
 	void FixedUpdate()
@@ -78,7 +95,8 @@ public class TwinMotorController : MonoBehaviour
 		float vForward = Vector3.Dot(v, forward);
 		Vector3 side = Vector3.Cross(Vector3.up, forward).normalized;
 		float vSide = Vector3.Dot(v, side);
-		float k = maxThrust / (topSpeed * topSpeed);
+		// k is set so full thrust balances both drag terms exactly at topSpeed.
+		float k = Mathf.Max(0f, maxThrust - rb.mass * linearDrag * topSpeed) / (topSpeed * topSpeed);
 		Vector3 drag = -forward * (k * vForward * Mathf.Abs(vForward))
 		               - side * (k * lateralDragFactor * vSide * Mathf.Abs(vSide));
 		rb.AddForce(drag);

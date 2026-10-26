@@ -46,6 +46,10 @@ public class PilotInput : MonoBehaviour
     [Tooltip("Throttle needs the deadman held (Space / gamepad right shoulder); releasing it disarms.")]
     public bool requireDeadman = true;
 
+    [Header("Throttle")]
+    [Tooltip("How fast the lever moves while W/S are held [m/s of target per second]. Arcade mode raises this while it drives the boat.")]
+    public float throttleRate = SPEED_RATE;
+
     [Header("Gamepad")]
     [Tooltip("Stick values below this are treated as centred.")]
     [Range(0f, 0.5f)] public float stickDeadzone = 0.15f;
@@ -109,7 +113,7 @@ public class PilotInput : MonoBehaviour
         if (kb != null) throttleAxis += (kb.wKey.isPressed ? 1f : 0f) - (kb.sKey.isPressed ? 1f : 0f);
         if (pad != null) throttleAxis += ApplyDeadzone(pad.leftStick.y.ReadValue());
         throttleAxis = Mathf.Clamp(throttleAxis, -1f, 1f);
-        _targetSpeed = Mathf.Clamp(_targetSpeed + SPEED_RATE * throttleAxis * dt, SPEED_MIN, SPEED_MAX);
+        _targetSpeed = Mathf.Clamp(_targetSpeed + throttleRate * throttleAxis * dt, SPEED_MIN, SPEED_MAX);
 
         // Bank: spring-centred. On the gamepad the stick sets the bank directly
         // (full deflection = BANK_MAX); on the keyboard A/D ramp it and it relaxes
