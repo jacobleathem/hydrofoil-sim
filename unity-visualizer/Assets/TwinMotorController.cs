@@ -16,8 +16,8 @@ public class TwinMotorController : MonoBehaviour
 	[Header("Water Drag")]
 	[Tooltip("Speed reached at full throttle [m/s]. Forward drag is quadratic and tuned so it balances maxThrust here.")]
 	public float topSpeed = 40f;
-	[Tooltip("Sideways drag as a multiple of forward drag. High = boat carves instead of sliding through turns.")]
-	public float lateralDragFactor = 20f;
+	[Tooltip("Sideways grip [1/s]: how fast sideslip is killed. High = boat carves instead of sliding through turns. Keep below 2 / fixed timestep (100).")]
+	public float lateralGrip = 20f;
 	[Tooltip("Linear drag on every axis [1/s], so the boat coasts to a stop with the throttle off.")]
 	public float linearDrag = 0.3f;
 
@@ -131,11 +131,12 @@ public class TwinMotorController : MonoBehaviour
 			rb.AddForce(forward * Mathf.Clamp(thrust, -brakeShare * maxThrust, maxThrust));
 		}
 
-		// 3. Water drag. Quadratic along the hull, much stronger sideways.
+		// 3. Water drag. Quadratic along the hull; sideways it's a linear grip
+		// that doesn't weaken as topSpeed (and so k) changes.
 		Vector3 side = Vector3.Cross(Vector3.up, forward).normalized;
 		float vSide = Vector3.Dot(v, side);
 		Vector3 drag = -forward * (k * vForward * Mathf.Abs(vForward))
-		               - side * (k * lateralDragFactor * vSide * Mathf.Abs(vSide));
+		               - side * (rb.mass * lateralGrip * vSide);
 		rb.AddForce(drag);
 		rb.AddForce(-v * linearDrag, ForceMode.Acceleration);
 
