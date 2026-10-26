@@ -28,8 +28,6 @@ public class TwinMotorController : MonoBehaviour
 	[Range(0f, 1f)] public float lowSpeedTurn = 0.5f;
 	[Tooltip("How fast the yaw rate follows the stick [1/s].")]
 	public float yawResponse = 8f;
-	[Tooltip("Hull box (local X length, Y height, Z beam) [m] used for the inertia tensor.")]
-	public Vector3 hullSize = new Vector3(1.2f, 0.3f, 0.8f);
 
 	[Header("Pilot")]
 	[Tooltip("Stick state source. Left empty, the first PilotInput in the scene is used, or one is added here.")]
@@ -37,6 +35,8 @@ public class TwinMotorController : MonoBehaviour
 
 	// The hull model's long axis is its local +X, not +Z.
 	Vector3 Forward => transform.right;
+
+	float yawRate; // deg/s, current turn rate
 
 	void Start()
 	{
@@ -48,16 +48,12 @@ public class TwinMotorController : MonoBehaviour
 	{
 		if (rb == null) return;
 
-		// The scene freezes all rotation. Leave yaw free so the boat can turn;
-		// pitch and roll stay frozen for now.
-		rb.constraints = RigidbodyConstraints.FreezeRotationX | RigidbodyConstraints.FreezeRotationZ;
-
-		// The inertia Unity derives from the hull's few tiny colliders is near
-		// zero and tilted about 1.5 deg, which couples any stray torque into yaw.
-		// Use a solid box instead.
-		Vector3 s = hullSize;
-		rb.inertiaTensor = rb.mass / 12f * new Vector3(s.y * s.y + s.z * s.z, s.x * s.x + s.z * s.z, s.x * s.x + s.y * s.y);
-		rb.inertiaTensorRotation = Quaternion.identity;
+		// Physics never rotates the boat; heading is steered directly in step 4.
+		// Freeing yaw alone (pitch/roll locked) made PhysX leak torque into yaw
+		// and, with the hull's near-zero inertia, produce NaN angular velocity.
+		rb.constraints = RigidbodyConstraints.FreezeRotation;
+		rb.angularVelocity = Vector3.zero;
+		yawRate = 0f;
 	}
 
 	void FixedUpdate()
@@ -89,11 +85,11 @@ public class TwinMotorController : MonoBehaviour
 		rb.AddForce(-v * linearDrag, ForceMode.Acceleration);
 
 		// 4. Yaw. Steer right (+) turns right; reversed when going backwards.
+		// The sideways drag above then swings the velocity round with the hull.
 		float speedFactor = Mathf.Lerp(lowSpeedTurn, 1f, Mathf.Clamp01(Mathf.Abs(vForward) / topSpeed));
-		float targetYaw = steer * maxYawRate * Mathf.Deg2Rad * speedFactor * (vForward < -0.1f ? -1f : 1f);
-		Vector3 w = rb.angularVelocity;
-		w.y = Mathf.Lerp(w.y, targetYaw, Mathf.Clamp01(yawResponse * Time.fixedDeltaTime));
-		rb.angularVelocity = w;
+		float targetYaw = steer * maxYawRate * speedFactor * (vForward < -0.1f ? -1f : 1f);
+		yawRate = Mathf.Lerp(yawRate, targetYaw, Mathf.Clamp01(yawResponse * Time.fixedDeltaTime));
+		rb.MoveRotation(Quaternion.AngleAxis(yawRate * Time.fixedDeltaTime, Vector3.up) * rb.rotation);
 
 		// 5. Calculate Forward Velocity for Simulink
 		currentSpeed = vForward;
