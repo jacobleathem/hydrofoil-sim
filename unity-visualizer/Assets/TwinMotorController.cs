@@ -12,11 +12,23 @@ public class TwinMotorController : MonoBehaviour
 	public float maxThrust = 5000f; // N change num
 	public float currentSpeed;      // Send this to Simulink!
 
+	[Header("Pilot")]
+	[Tooltip("Stick state source. Left empty, the first PilotInput in the scene is used, or one is added here.")]
+	public PilotInput pilot;
+
+	void Start()
+	{
+		if (pilot == null) pilot = FindFirstObjectByType<PilotInput>();
+		if (pilot == null) pilot = gameObject.AddComponent<PilotInput>();
+	}
+
 	void FixedUpdate()
 	{
-		// 1. Get Input (W for throttle, A/D for steering potentially)
-		float throttle = Input.GetAxis("Vertical"); // 0 to 1
-		float steer = Input.GetAxis("Horizontal");  // -1 to 1
+		// 1. Get Input from the shared cockpit stick. Throttle is the lever
+		// (holds its position), steer follows the bank command. Nothing is
+		// applied unless the pilot is armed with the deadman held.
+		float throttle = pilot.ThrottleEnabled ? pilot.CommandedThrottle01 : 0f; // 0 to 1
+		float steer = pilot.ThrottleEnabled ? pilot.Steer01 : 0f;                 // -1 to 1
 
 		// 2. Calculate Thrust for each motor
 		// Simple "Tank Steering" logic: 
