@@ -18,10 +18,18 @@ public class Floater : MonoBehaviour
         {
             float displacementMultiplyer = Mathf.Clamp01(waterLevel - transform.position.y);
 			Vector3 buoyancyForce = new Vector3(0f, displacementMultiplyer * waterDensity * floatingThreshold * Mathf.Abs(Physics.gravity.y), 0f);
-			foilBody.AddForceAtPosition(buoyancyForce, transform.position, ForceMode.Acceleration);
+			// With pitch and roll frozen (arcade boat), torque on those axes can't tilt
+			// the body and PhysX leaks it into yaw instead: the boat spins at the
+			// angular velocity cap. So push through the centre of mass and leave the
+			// angular damping out; yaw is then TwinMotorController's to set.
+			const RigidbodyConstraints tilt = RigidbodyConstraints.FreezeRotationX | RigidbodyConstraints.FreezeRotationZ;
+			bool tiltFrozen = (foilBody.constraints & tilt) == tilt;
+			Vector3 at = tiltFrozen ? foilBody.worldCenterOfMass : transform.position;
+			foilBody.AddForceAtPosition(buoyancyForce, at, ForceMode.Acceleration);
 
 			foilBody.AddForce(Vector3.up * -foilBody.linearVelocity.y * waterDrag, ForceMode.VelocityChange);
-			foilBody.AddTorque(-foilBody.angularVelocity * waterAngularDrag, ForceMode.VelocityChange);
+			if (!tiltFrozen)
+				foilBody.AddTorque(-foilBody.angularVelocity * waterAngularDrag, ForceMode.VelocityChange);
 		}
     }
 }
