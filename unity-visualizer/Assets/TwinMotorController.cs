@@ -14,20 +14,24 @@ public class TwinMotorController : MonoBehaviour
 	public float currentSpeed;      // Send this to Simulink!
 
 	[Header("Water Drag")]
-	[Tooltip("Speed reached at full throttle [m/s]. Forward drag is quadratic and tuned so it balances maxThrust here.")]
+	[Tooltip("Speed reached at full throttle [m/s]. Propeller thrust fades with speed and balances drag here.")]
 	public float topSpeed = 40f;
+	[Tooltip("Deceleration from drag alone at top speed [m/s^2]: how hard the boat slows when you cut the throttle at full speed. Low = long glide.")]
+	public float coastDecel = 4f;
 	[Tooltip("Sideways grip [1/s]: how fast sideslip is killed. High = boat carves instead of sliding through turns. Keep below 2 / fixed timestep (100).")]
 	public float lateralGrip = 20f;
-	[Tooltip("Linear drag on every axis [1/s], so the boat coasts to a stop with the throttle off.")]
-	public float linearDrag = 0.3f;
+	[Tooltip("Linear drag on every axis [1/s], so the boat eventually coasts to a stop. Counts towards coastDecel.")]
+	public float linearDrag = 0.05f;
+	[Tooltip("Below about this speed the hull is in the water instead of up on the foil [m/s].")]
+	public float takeoffSpeed = 8f;
+	[Tooltip("Extra linear drag with the hull in the water [1/s]. Fades out between 60% and 100% of takeoffSpeed.")]
+	public float hullDrag = 1.2f;
+	[Tooltip("Speed scrubbed by turning [1/s] at full turn rate, in proportion to how hard you turn. Carving or drifting hard slows the boat.")]
+	public float turnScrub = 0.35f;
 
 	[Header("Throttle")]
 	[Tooltip("Seconds to push the lever from zero to full (or back) while W/S are held. Python mode keeps PilotInput's own, slower rate.")]
 	public float leverSweepTime = 1.5f;
-	[Tooltip("The lever is a speed setpoint (0..topSpeed). Speed error that gets full thrust or full braking [m/s].")]
-	public float speedBand = 3f;
-	[Tooltip("Reverse thrust available for slowing to the lever's speed, as a share of maxThrust.")]
-	[Range(0f, 1f)] public float brakeShare = 0.6f;
 
 	[Header("Turning")]
 	[Tooltip("Yaw rate at full steer and full speed [deg/s].")]
@@ -112,24 +116,22 @@ public class TwinMotorController : MonoBehaviour
 		Vector3 forward = Forward;
 		Vector3 v = rb.linearVelocity;
 		float vForward = Vector3.Dot(v, forward);
-		// Quadratic drag coefficient, set so full thrust balances both drag
-		// terms exactly at topSpeed.
-		float k = Mathf.Max(0f, maxThrust - rb.mass * linearDrag * topSpeed) / (topSpeed * topSpeed);
+		// Foil drag at top speed is mass * coastDecel, split into the linear
+		// term and a quadratic one with coefficient k.
+		float dragAtTop = rb.mass * coastDecel;
+		float k = Mathf.Max(0f, dragAtTop - rb.mass * linearDrag * topSpeed) / (topSpeed * topSpeed);
 
 		// 2. Thrust, through the centre of mass. Pitch and roll are frozen, and
 		// the motors sit a few mm off-centre, so pushing at their position only
 		// added a yaw drift. Turning is handled in step 4.
-		// The lever sets a target speed: feed forward the thrust that holds it
-		// against drag, plus a correction, so pulling the lever back brakes
-		// (reverse thrust) instead of waiting for drag. With throttle cut by
-		// the safety gate the motors are off and the boat just coasts.
-		if (pilot.ThrottleEnabled)
-		{
-			float target = throttle * topSpeed;
-			float hold = k * target * target + rb.mass * linearDrag * target;
-			float thrust = hold + maxThrust * (target - vForward) / Mathf.Max(0.1f, speedBand);
-			rb.AddForce(forward * Mathf.Clamp(thrust, -brakeShare * maxThrust, maxThrust));
-		}
+		// Throttle is power, forward only: no reverse thrust, so cutting it
+		// means coasting. Like a propeller, thrust is strongest from a standstill
+		// and fades with speed, reaching the foil drag at topSpeed. That lets
+		// the drag at speed stay low, so a coast is a long glide.
+		float propSpeed = topSpeed / Mathf.Max(0.05f, 1f - dragAtTop / maxThrust);
+		float thrust = throttle * maxThrust * Mathf.Max(0f, 1f - vForward / propSpeed);
+		if (thrust > 0f)
+			rb.AddForce(forward * thrust);
 
 		// 3. Water drag. Quadratic along the hull; sideways it's a linear grip
 		// that doesn't weaken as topSpeed (and so k) changes.
@@ -139,6 +141,16 @@ public class TwinMotorController : MonoBehaviour
 		               - side * (rb.mass * lateralGrip * vSide);
 		rb.AddForce(drag);
 		rb.AddForce(-v * linearDrag, ForceMode.Acceleration);
+
+		// Off the foil the hull sits in the water and drag jumps: the glide
+		// ends with the boat settling off the foil and slowing quickly.
+		float onFoil = Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.6f * takeoffSpeed, takeoffSpeed, Mathf.Abs(vForward)));
+		rb.AddForce(-v * hullDrag * (1f - onFoil), ForceMode.Acceleration);
+
+		// Turning scrubs speed, more the harder you turn, so a hard carve or
+		// drift doubles as a brake. Uses last step's turn rate.
+		float turnLoad = Mathf.Abs(yawRate) / Mathf.Max(1f, maxYawRate);
+		rb.AddForce(-forward * (turnScrub * turnLoad * vForward), ForceMode.Acceleration);
 
 		// 4. Yaw. Steer right (+) turns right; reversed when going backwards.
 		// The sideways drag above then swings the velocity round with the hull.
