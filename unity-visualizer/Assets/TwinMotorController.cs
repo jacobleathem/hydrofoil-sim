@@ -23,11 +23,11 @@ public class TwinMotorController : MonoBehaviour
 
 	[Header("Turning")]
 	[Tooltip("Yaw rate at full steer and full speed [deg/s].")]
-	public float maxYawRate = 60f;
+	public float maxYawRate = 90f;
 	[Tooltip("Share of maxYawRate available when stopped (twin motors can pivot the boat).")]
-	[Range(0f, 1f)] public float lowSpeedTurn = 0.35f;
+	[Range(0f, 1f)] public float lowSpeedTurn = 0.5f;
 	[Tooltip("How fast the yaw rate follows the stick [1/s].")]
-	public float yawResponse = 4f;
+	public float yawResponse = 8f;
 	[Tooltip("Hull box (local X length, Y height, Z beam) [m] used for the inertia tensor.")]
 	public Vector3 hullSize = new Vector3(1.2f, 0.3f, 0.8f);
 
@@ -63,10 +63,12 @@ public class TwinMotorController : MonoBehaviour
 	void FixedUpdate()
 	{
 		// 1. Get Input from the shared cockpit stick. Throttle is the lever
-		// (holds its position), steer follows the bank command. Nothing is
-		// applied unless the pilot is armed with the deadman held.
+		// (holds its position). Steer is the raw stick, not the bank command:
+		// the bank ramp is paced for the Python roll PID and made turns feel
+		// dead here. Nothing is applied unless the pilot is armed with the
+		// deadman held.
 		float throttle = pilot.ThrottleEnabled ? pilot.CommandedThrottle01 : 0f; // 0 to 1
-		float steer = pilot.ThrottleEnabled ? pilot.Steer01 : 0f;                 // -1 to 1
+		float steer = pilot.ThrottleEnabled ? pilot.SteerInput : 0f;                // -1 to 1
 
 		// 2. Thrust, through the centre of mass. Pitch and roll are frozen, and
 		// the motors sit a few mm off-centre, so pushing at their position only

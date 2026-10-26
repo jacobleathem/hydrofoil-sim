@@ -54,6 +54,7 @@ public class PilotInput : MonoBehaviour
     [SerializeField] private float _flyingHeight = 0.55f;
     [SerializeField] private float _targetSpeed = 0.0f;
     [SerializeField] private float _phiRef = 0.0f;
+    [SerializeField] private float _steerInput = 0.0f;
     [SerializeField] private bool _armed;
     [SerializeField] private bool _deadmanHeld;
     [SerializeField] private string _status = "Disarmed";
@@ -68,6 +69,12 @@ public class PilotInput : MonoBehaviour
     public float PhiRef => _phiRef;
     /// <summary>Bank command normalised to -1..1.</summary>
     public float Steer01 => _phiRef / BANK_MAX;
+    /// <summary>
+    /// Raw steering input -1..1 (+ve = right): A/D jump straight to full, the
+    /// gamepad stick is proportional. No bank-rate ramp, so the arcade boat
+    /// turns the moment you press. Python mode uses PhiRef instead.
+    /// </summary>
+    public float SteerInput => _steerInput;
 
     public bool Armed => _armed;
     public bool DeadmanHeld => _deadmanHeld;
@@ -110,6 +117,8 @@ public class PilotInput : MonoBehaviour
         float stickBank = pad != null ? ApplyDeadzone(pad.rightStick.x.ReadValue()) : 0f;
         bool bankRight = kb != null && kb.dKey.isPressed;
         bool bankLeft  = kb != null && kb.aKey.isPressed;
+        float keyBank = (bankRight ? 1f : 0f) - (bankLeft ? 1f : 0f);
+        _steerInput = stickBank != 0f ? stickBank : keyBank;
         if (stickBank != 0f)
         {
             _phiRef = Mathf.Clamp(stickBank * BANK_MAX, BANK_MIN, BANK_MAX);
