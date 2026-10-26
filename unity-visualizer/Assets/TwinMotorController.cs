@@ -5,6 +5,7 @@ public class TwinMotorController : MonoBehaviour
 	public Rigidbody rb;
 
 	[Header("Motor Positions")]
+	// Not used for thrust while pitch and roll are frozen; see FixedUpdate.
 	public Transform leftMotorPos;  // Drag 'LeftMotorPos' here
 	public Transform rightMotorPos; // Drag 'RightMotorPos' here
 
@@ -12,9 +13,30 @@ public class TwinMotorController : MonoBehaviour
 	public float maxThrust = 5000f; // N change num
 	public float currentSpeed;      // Send this to Simulink!
 
+	[Header("Water Drag")]
+	[Tooltip("Speed reached at full throttle [m/s]. Forward drag is quadratic and tuned so it balances maxThrust here.")]
+	public float topSpeed = 10f;
+	[Tooltip("Sideways drag as a multiple of forward drag. High = boat carves instead of sliding through turns.")]
+	public float lateralDragFactor = 20f;
+	[Tooltip("Linear drag on every axis [1/s], so the boat coasts to a stop with the throttle off.")]
+	public float linearDrag = 0.3f;
+
+	[Header("Turning")]
+	[Tooltip("Yaw rate at full steer and full speed [deg/s].")]
+	public float maxYawRate = 90f;
+	[Tooltip("Share of maxYawRate available when stopped (twin motors can pivot the boat).")]
+	[Range(0f, 1f)] public float lowSpeedTurn = 0.5f;
+	[Tooltip("How fast the yaw rate follows the stick [1/s].")]
+	public float yawResponse = 8f;
+
 	[Header("Pilot")]
 	[Tooltip("Stick state source. Left empty, the first PilotInput in the scene is used, or one is added here.")]
 	public PilotInput pilot;
+
+	// The hull model's long axis is its local +X, not +Z.
+	Vector3 Forward => transform.right;
+
+	float yawRate; // deg/s, current turn rate
 
 	void Start()
 	{
@@ -22,29 +44,54 @@ public class TwinMotorController : MonoBehaviour
 		if (pilot == null) pilot = gameObject.AddComponent<PilotInput>();
 	}
 
+	void OnEnable()
+	{
+		if (rb == null) return;
+
+		// Physics never rotates the boat; heading is steered directly in step 4.
+		// Freeing yaw alone (pitch/roll locked) made PhysX leak torque into yaw
+		// and, with the hull's near-zero inertia, produce NaN angular velocity.
+		rb.constraints = RigidbodyConstraints.FreezeRotation;
+		rb.angularVelocity = Vector3.zero;
+		yawRate = 0f;
+	}
+
 	void FixedUpdate()
 	{
 		// 1. Get Input from the shared cockpit stick. Throttle is the lever
-		// (holds its position), steer follows the bank command. Nothing is
-		// applied unless the pilot is armed with the deadman held.
+		// (holds its position). Steer is the raw stick, not the bank command:
+		// the bank ramp is paced for the Python roll PID and made turns feel
+		// dead here. Nothing is applied unless the pilot is armed with the
+		// deadman held.
 		float throttle = pilot.ThrottleEnabled ? pilot.CommandedThrottle01 : 0f; // 0 to 1
-		float steer = pilot.ThrottleEnabled ? pilot.Steer01 : 0f;                 // -1 to 1
+		float steer = pilot.ThrottleEnabled ? pilot.SteerInput : 0f;                // -1 to 1
 
-		// 2. Calculate Thrust for each motor
-		// Simple "Tank Steering" logic: 
-		// Turning Right (D) -> Left motor pushes harder
-		float leftThrust = Mathf.Clamp01(throttle + steer * 0.5f) * maxThrust;
-		float rightThrust = Mathf.Clamp01(throttle - steer * 0.5f) * maxThrust;
+		// 2. Thrust, through the centre of mass. Pitch and roll are frozen, and
+		// the motors sit a few mm off-centre, so pushing at their position only
+		// added a yaw drift. Turning is handled in step 4.
+		Vector3 forward = Forward;
+		if (throttle > 0f)
+			rb.AddForce(forward * throttle * maxThrust);
 
-		// 3. Apply Force at specific POSITIONS
-		// This creates realistic Torque (Pitch up + Yaw)
-		if (leftThrust > 0)
-			rb.AddForceAtPosition(transform.right * leftThrust, leftMotorPos.position);
+		// 3. Water drag. Quadratic along the hull, much stronger sideways.
+		Vector3 v = rb.linearVelocity;
+		float vForward = Vector3.Dot(v, forward);
+		Vector3 side = Vector3.Cross(Vector3.up, forward).normalized;
+		float vSide = Vector3.Dot(v, side);
+		float k = maxThrust / (topSpeed * topSpeed);
+		Vector3 drag = -forward * (k * vForward * Mathf.Abs(vForward))
+		               - side * (k * lateralDragFactor * vSide * Mathf.Abs(vSide));
+		rb.AddForce(drag);
+		rb.AddForce(-v * linearDrag, ForceMode.Acceleration);
 
-		if (rightThrust > 0)
-			rb.AddForceAtPosition(transform.right * rightThrust, rightMotorPos.position);
+		// 4. Yaw. Steer right (+) turns right; reversed when going backwards.
+		// The sideways drag above then swings the velocity round with the hull.
+		float speedFactor = Mathf.Lerp(lowSpeedTurn, 1f, Mathf.Clamp01(Mathf.Abs(vForward) / topSpeed));
+		float targetYaw = steer * maxYawRate * speedFactor * (vForward < -0.1f ? -1f : 1f);
+		yawRate = Mathf.Lerp(yawRate, targetYaw, Mathf.Clamp01(yawResponse * Time.fixedDeltaTime));
+		rb.MoveRotation(Quaternion.AngleAxis(yawRate * Time.fixedDeltaTime, Vector3.up) * rb.rotation);
 
-		// 4. Calculate Forward Velocity for Simulink
-		currentSpeed = Vector3.Dot(rb.linearVelocity, transform.forward);
+		// 5. Calculate Forward Velocity for Simulink
+		currentSpeed = vForward;
 	}
 }
