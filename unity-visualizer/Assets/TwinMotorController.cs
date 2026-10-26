@@ -15,7 +15,7 @@ public class TwinMotorController : MonoBehaviour
 
 	[Header("Water Drag")]
 	[Tooltip("Speed reached at full throttle [m/s]. Forward drag is quadratic and tuned so it balances maxThrust here.")]
-	public float topSpeed = 20f;
+	public float topSpeed = 40f;
 	[Tooltip("Sideways drag as a multiple of forward drag. High = boat carves instead of sliding through turns.")]
 	public float lateralDragFactor = 20f;
 	[Tooltip("Linear drag on every axis [1/s], so the boat coasts to a stop with the throttle off.")]
@@ -24,6 +24,10 @@ public class TwinMotorController : MonoBehaviour
 	[Header("Throttle")]
 	[Tooltip("Seconds to push the lever from zero to full (or back) while W/S are held. Python mode keeps PilotInput's own, slower rate.")]
 	public float leverSweepTime = 1.5f;
+	[Tooltip("The lever is a speed setpoint (0..topSpeed). Speed error that gets full thrust or full braking [m/s].")]
+	public float speedBand = 3f;
+	[Tooltip("Reverse thrust available for slowing to the lever's speed, as a share of maxThrust.")]
+	[Range(0f, 1f)] public float brakeShare = 0.6f;
 
 	[Header("Turning")]
 	[Tooltip("Yaw rate at full steer and full speed [deg/s].")]
@@ -105,20 +109,31 @@ public class TwinMotorController : MonoBehaviour
 		float throttle = pilot.ThrottleEnabled ? pilot.CommandedThrottle01 : 0f; // 0 to 1
 		float steer = pilot.ThrottleEnabled ? pilot.SteerInput : 0f;                // -1 to 1
 
+		Vector3 forward = Forward;
+		Vector3 v = rb.linearVelocity;
+		float vForward = Vector3.Dot(v, forward);
+		// Quadratic drag coefficient, set so full thrust balances both drag
+		// terms exactly at topSpeed.
+		float k = Mathf.Max(0f, maxThrust - rb.mass * linearDrag * topSpeed) / (topSpeed * topSpeed);
+
 		// 2. Thrust, through the centre of mass. Pitch and roll are frozen, and
 		// the motors sit a few mm off-centre, so pushing at their position only
 		// added a yaw drift. Turning is handled in step 4.
-		Vector3 forward = Forward;
-		if (throttle > 0f)
-			rb.AddForce(forward * throttle * maxThrust);
+		// The lever sets a target speed: feed forward the thrust that holds it
+		// against drag, plus a correction, so pulling the lever back brakes
+		// (reverse thrust) instead of waiting for drag. With throttle cut by
+		// the safety gate the motors are off and the boat just coasts.
+		if (pilot.ThrottleEnabled)
+		{
+			float target = throttle * topSpeed;
+			float hold = k * target * target + rb.mass * linearDrag * target;
+			float thrust = hold + maxThrust * (target - vForward) / Mathf.Max(0.1f, speedBand);
+			rb.AddForce(forward * Mathf.Clamp(thrust, -brakeShare * maxThrust, maxThrust));
+		}
 
 		// 3. Water drag. Quadratic along the hull, much stronger sideways.
-		Vector3 v = rb.linearVelocity;
-		float vForward = Vector3.Dot(v, forward);
 		Vector3 side = Vector3.Cross(Vector3.up, forward).normalized;
 		float vSide = Vector3.Dot(v, side);
-		// k is set so full thrust balances both drag terms exactly at topSpeed.
-		float k = Mathf.Max(0f, maxThrust - rb.mass * linearDrag * topSpeed) / (topSpeed * topSpeed);
 		Vector3 drag = -forward * (k * vForward * Mathf.Abs(vForward))
 		               - side * (k * lateralDragFactor * vSide * Mathf.Abs(vSide));
 		rb.AddForce(drag);
