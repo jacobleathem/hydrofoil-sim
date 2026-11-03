@@ -56,6 +56,10 @@ public class PythonSimDriver : MonoBehaviour
              "modeled forward axis with the physics' forward axis (Unity +Z). Unity's Y-rotation " +
              "is clockwise from above, so a 90 degree CCW correction is -90.")]
     public float modelYawOffsetDeg = -90f;
+    [Tooltip("Flap hinge axis in the hull's local axes, pointing to the left. A positive " +
+             "turn about it must put the trailing edge down, which is Python's +delta. " +
+             "This hull's long axis is local +X, so its left is +Z.")]
+    public Vector3 flapHingeAxis = Vector3.forward;
 
     [Header("Debug")]
     public bool showGizmos = true;
@@ -130,6 +134,11 @@ public class PythonSimDriver : MonoBehaviour
 
     private System.Diagnostics.Process _simProcess;
 
+    // Flap rotations as authored, so deflections are applied on top of them.
+    private Quaternion _leftFoilRest = Quaternion.identity;
+    private Quaternion _rightFoilRest = Quaternion.identity;
+    private Quaternion _elevFoilRest = Quaternion.identity;
+
     // ── Lifecycle ─────────────────────────────────────────────────────────
 
     void Start()
@@ -141,6 +150,10 @@ public class PythonSimDriver : MonoBehaviour
         // ever visibly moves. Keeps this driving Unity correctly regardless
         // of whether the window has focus.
         Application.runInBackground = true;
+
+        if (leftFoil != null) _leftFoilRest = leftFoil.localRotation;
+        if (rightFoil != null) _rightFoilRest = rightFoil.localRotation;
+        if (elevatorFoil != null) _elevFoilRest = elevatorFoil.localRotation;
 
         if (shipTransform != null)
         {
@@ -312,9 +325,18 @@ public class PythonSimDriver : MonoBehaviour
 
         // Foil flap rotations. d_main is the common (heave) deflection, d_roll is the
         // differential added on top so the two flaps counter-rotate for roll/turn authority.
-        if (leftFoil  != null) leftFoil.localRotation  = Quaternion.Euler(-(p.d_main - p.d_roll), 0, 0);
-        if (rightFoil != null) rightFoil.localRotation = Quaternion.Euler(-(p.d_main + p.d_roll), 0, 0);
-        if (elevatorFoil != null) elevatorFoil.localRotation = Quaternion.Euler(-p.d_elev, 0, 0);
+        // Python's +delta adds angle of attack (trailing edge down). The flaps used to
+        // turn about their local X, which on this hull is the long axis, so they
+        // twisted like ailerons instead of hinging.
+        SetFlap(leftFoil,     _leftFoilRest,  p.d_main - p.d_roll);
+        SetFlap(rightFoil,    _rightFoilRest, p.d_main + p.d_roll);
+        SetFlap(elevatorFoil, _elevFoilRest,  p.d_elev);
+    }
+
+    void SetFlap(Transform flap, Quaternion rest, float deltaDeg)
+    {
+        if (flap == null) return;
+        flap.localRotation = Quaternion.AngleAxis(deltaDeg, flapHingeAxis) * rest;
     }
 
     void UpdateInspector(SimPacket p)
