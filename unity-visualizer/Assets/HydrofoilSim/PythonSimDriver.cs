@@ -60,6 +60,14 @@ public class PythonSimDriver : MonoBehaviour
              "turn about it must put the trailing edge down, which is Python's +delta. " +
              "This hull's long axis is local +X, so its left is +Z.")]
     public Vector3 flapHingeAxis = Vector3.forward;
+    [Tooltip("The point on the hull model (local axes) that Python's state describes, its " +
+             "centre of mass. Default: 0.5 m above the main flaps (Python's main_pos_z), so " +
+             "the main foil sits at the depth Python computes. Update it if the model or " +
+             "Python's geometry changes.")]
+    public Vector3 modelCgOffset = new Vector3(0.784f, 0.341f, 0.0275f);
+    [Tooltip("Map the sim's origin and north (NED x) to where the boat is placed and facing in " +
+             "the scene when Play starts. Off: the sim's origin is the world origin, north is +Z.")]
+    public bool anchorToScenePose = true;
 
     [Header("Debug")]
     public bool showGizmos = true;
@@ -139,6 +147,10 @@ public class PythonSimDriver : MonoBehaviour
     private Quaternion _rightFoilRest = Quaternion.identity;
     private Quaternion _elevFoilRest = Quaternion.identity;
 
+    // Where the sim's origin and north are in the scene (see anchorToScenePose).
+    private Vector3 _anchorPos;
+    private float _anchorYawDeg;
+
     // ── Lifecycle ─────────────────────────────────────────────────────────
 
     void Start()
@@ -154,6 +166,14 @@ public class PythonSimDriver : MonoBehaviour
         if (leftFoil != null) _leftFoilRest = leftFoil.localRotation;
         if (rightFoil != null) _rightFoilRest = rightFoil.localRotation;
         if (elevatorFoil != null) _elevFoilRest = elevatorFoil.localRotation;
+
+        if (anchorToScenePose && shipTransform != null)
+        {
+            Vector3 cg = shipTransform.TransformPoint(modelCgOffset);
+            _anchorPos = new Vector3(cg.x, 0f, cg.z);
+            // The physics heading of the placed boat: undo the mesh's yaw correction.
+            _anchorYawDeg = shipTransform.eulerAngles.y - modelYawOffsetDeg;
+        }
 
         if (shipTransform != null)
         {
@@ -305,9 +325,11 @@ public class PythonSimDriver : MonoBehaviour
     {
         if (shipTransform == null) return;
 
-        // NED → Unity: x=NED.y, y=-(NED.z) + surfaceY, z=NED.x
-        Vector3 unityPos = new Vector3(p.y, -p.z + waterSurfaceY, p.x);
-        shipTransform.position = unityPos;
+        // NED → Unity: x=NED.y, y=-(NED.z) + surfaceY, z=NED.x, then turned and
+        // moved so the sim's origin and north are the boat's pose in the scene.
+        Quaternion frame = Quaternion.Euler(0f, _anchorYawDeg, 0f);
+        Vector3 cgWorld = _anchorPos + frame * new Vector3(p.y, 0f, p.x);
+        cgWorld.y = -p.z + waterSurfaceY;
 
         // Body attitude in the physics frame (forward +Z, right +X, up +Y).
         // Quaternion.Euler applies roll, then pitch, then yaw, which matches
@@ -317,11 +339,15 @@ public class PythonSimDriver : MonoBehaviour
         // applied first, in the model's own frame. Folding it into the yaw angle (as
         // before) rotated pitch and roll with it: Python's pitch showed as a roll of
         // the hull and its roll as pitch.
-        shipTransform.rotation = Quaternion.Euler(
+        shipTransform.rotation = frame
+            * Quaternion.Euler(
                 -p.theta * Mathf.Rad2Deg,
                  p.psi   * Mathf.Rad2Deg,
                 -p.phi   * Mathf.Rad2Deg)
             * Quaternion.Euler(0f, modelYawOffsetDeg, 0f);
+
+        // Python's state is the centre of mass; put that point of the model there.
+        shipTransform.position = cgWorld - shipTransform.TransformVector(modelCgOffset);
 
         // Foil flap rotations. d_main is the common (heave) deflection, d_roll is the
         // differential added on top so the two flaps counter-rotate for roll/turn authority.
