@@ -56,7 +56,8 @@ class SimStreamer:
 
     def send(self, t: float, eta, nu, cmds: dict,
               thrust: float = 0.0, draft: float = 0.0,
-              foilborne: bool = False, wave_elev: float = 0.0):
+              foilborne: bool = False, wave_elev: float = 0.0,
+              thrust_scale: float = 1.0, failsafe: str = ""):
         """
         Encode and send one state packet.
 
@@ -72,6 +73,8 @@ class SimStreamer:
         draft     : hull draft below the local water surface [m]
         foilborne : True once draft has reached zero (hull clear of water)
         wave_elev : wave surface elevation at the vehicle's position [m]
+        thrust_scale : failsafe thrust scale, 1 = live, 0 = motors cut
+        failsafe  : why thrust is cut ("" while live)
         """
         packet = {
             "t":     round(float(t), 4),
@@ -91,6 +94,8 @@ class SimStreamer:
             "draft": round(float(draft), 4),
             "foilborne": bool(foilborne),
             "wave_elev": round(float(wave_elev), 4),
+            "thrust_scale": round(float(thrust_scale), 3),
+            "failsafe": failsafe,
         }
         try:
             self._sock.sendto(json.dumps(packet).encode(), (self.host, self.port))

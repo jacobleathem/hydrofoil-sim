@@ -40,9 +40,18 @@ public class PythonSimDriver : MonoBehaviour
     public string pythonHost = "127.0.0.1";
     public int pilotPort = 5006;
 
-    [Header("Auto-Launch sim_realtime.py in WSL")]
-    [Tooltip("Launch the Python sim automatically when Play starts, in the named WSL distro — removes the manual 'open a WSL terminal and type the right command' step entirely.")]
+    public enum LaunchMode { Wsl, LocalPython }
+
+    [Header("Auto-Launch sim_realtime.py")]
+    [Tooltip("Launch the Python sim automatically when Play starts — removes the manual 'open a terminal and type the right command' step entirely.")]
     public bool autoLaunchSim = true;
+    [Tooltip("Wsl: run simCommand in the named WSL distro. LocalPython: run the sim natively " +
+             "on Windows with localPython, from the repo root.")]
+    public LaunchMode launchMode = LaunchMode.Wsl;
+    [Tooltip("LocalPython mode: the Python interpreter, absolute or relative to the repo root " +
+             "(the folder above unity-visualizer). Default is a venv made with " +
+             "'python -m venv .venv' and 'pip install -r requirements.txt'.")]
+    public string localPython = ".venv/Scripts/python.exe";
     public string wslDistro = "Ubuntu";
     [Tooltip("Command run inside `wsl -d <distro> -e bash -lc \"<this>\"`. --host 127.0.0.1 " +
              "is required here — without it, Python auto-detects the WSL gateway IP, which " +
@@ -56,6 +65,18 @@ public class PythonSimDriver : MonoBehaviour
              "modeled forward axis with the physics' forward axis (Unity +Z). Unity's Y-rotation " +
              "is clockwise from above, so a 90 degree CCW correction is -90.")]
     public float modelYawOffsetDeg = -90f;
+    [Tooltip("Flap hinge axis in the hull's local axes, pointing to the left. A positive " +
+             "turn about it must put the trailing edge down, which is Python's +delta. " +
+             "This hull's long axis is local +X, so its left is +Z.")]
+    public Vector3 flapHingeAxis = Vector3.forward;
+    [Tooltip("The point on the hull model (local axes) that Python's state describes, its " +
+             "centre of mass. Default: 0.5 m above the main flaps (Python's main_pos_z), so " +
+             "the main foil sits at the depth Python computes. Update it if the model or " +
+             "Python's geometry changes.")]
+    public Vector3 modelCgOffset = new Vector3(0.784f, 0.341f, 0.0275f);
+    [Tooltip("Map the sim's origin and north (NED x) to where the boat is placed and facing in " +
+             "the scene when Play starts. Off: the sim's origin is the world origin, north is +Z.")]
+    public bool anchorToScenePose = true;
 
     [Header("Debug")]
     public bool showGizmos = true;
@@ -78,6 +99,8 @@ public class PythonSimDriver : MonoBehaviour
     [SerializeField] private float _draft;
     [SerializeField] private bool  _foilborne;
     [SerializeField] private float _waveElev;
+    [SerializeField] private float _thrustScale = 1f;
+    [SerializeField] private string _failsafe = "";
     [SerializeField] private int   _packetsReceived;
 
     // Read-only access for the cockpit HUD.
@@ -93,6 +116,10 @@ public class PythonSimDriver : MonoBehaviour
     public float Draft => _draft;
     public bool  Foilborne => _foilborne;
     public float WaveElev => _waveElev;
+    /// <summary>Python's failsafe thrust scale: 1 = motors live, 0 = cut.</summary>
+    public float ThrustScale => _thrustScale;
+    /// <summary>Why Python cut the motors (disarmed, deadman released, pilot link lost), "" while live.</summary>
+    public string FailsafeReason => _failsafe;
     public int   PacketsReceived => _packetsReceived;
     /// <summary>Real seconds since the last state packet arrived (infinity if none yet).</summary>
     public float SecondsSinceLastPacket => _packetsReceived == 0 ? float.PositiveInfinity : Time.realtimeSinceStartup - _lastPacketRealtime;
@@ -119,6 +146,8 @@ public class PythonSimDriver : MonoBehaviour
         public float draft;             // hull draft below local water surface [m]
         public bool  foilborne;         // draft <= 0, hull clear of the water
         public float wave_elev;         // wave surface elevation at the vehicle's position [m]
+        public float thrust_scale = 1f; // Python failsafe: 1 = motors live, 0 = cut (1 if the sim doesn't send it)
+        public string failsafe = "";    // why Python cut the motors, "" while live
     }
 
     // Climb/dive + throttle + bank pilot stick (from PilotInput), sent back to
@@ -129,6 +158,15 @@ public class PythonSimDriver : MonoBehaviour
     private float _pilotSendTimer;
 
     private System.Diagnostics.Process _simProcess;
+
+    // Flap rotations as authored, so deflections are applied on top of them.
+    private Quaternion _leftFoilRest = Quaternion.identity;
+    private Quaternion _rightFoilRest = Quaternion.identity;
+    private Quaternion _elevFoilRest = Quaternion.identity;
+
+    // Where the sim's origin and north are in the scene (see anchorToScenePose).
+    private Vector3 _anchorPos;
+    private float _anchorYawDeg;
 
     // ── Lifecycle ─────────────────────────────────────────────────────────
 
@@ -141,6 +179,18 @@ public class PythonSimDriver : MonoBehaviour
         // ever visibly moves. Keeps this driving Unity correctly regardless
         // of whether the window has focus.
         Application.runInBackground = true;
+
+        if (leftFoil != null) _leftFoilRest = leftFoil.localRotation;
+        if (rightFoil != null) _rightFoilRest = rightFoil.localRotation;
+        if (elevatorFoil != null) _elevFoilRest = elevatorFoil.localRotation;
+
+        if (anchorToScenePose && shipTransform != null)
+        {
+            Vector3 cg = shipTransform.TransformPoint(modelCgOffset);
+            _anchorPos = new Vector3(cg.x, 0f, cg.z);
+            // The physics heading of the placed boat: undo the mesh's yaw correction.
+            _anchorYawDeg = shipTransform.eulerAngles.y - modelYawOffsetDeg;
+        }
 
         if (shipTransform != null)
         {
@@ -176,16 +226,36 @@ public class PythonSimDriver : MonoBehaviour
                 RedirectStandardError = true,
                 CreateNoWindow = true,
             };
+            if (launchMode == LaunchMode.LocalPython)
+            {
+                string repoRoot = System.IO.Path.GetFullPath(System.IO.Path.Combine(Application.dataPath, "..", ".."));
+                psi.FileName = System.IO.Path.IsPathRooted(localPython)
+                    ? localPython
+                    : System.IO.Path.GetFullPath(System.IO.Path.Combine(repoRoot, localPython));
+                // --require-pilot: no thrust until this driver's first pilot packet,
+                // so the boat doesn't set off before the cockpit is connected.
+                psi.Arguments = $"-u -m hydrofoil.sim_realtime --host 127.0.0.1 --port {port} " +
+                                $"--pilot-port {pilotPort} --duration 86400 --require-pilot";
+                psi.WorkingDirectory = repoRoot;
+            }
             _simProcess = new System.Diagnostics.Process { StartInfo = psi, EnableRaisingEvents = true };
             _simProcess.OutputDataReceived += (s, e) => { if (e.Data != null) Debug.Log($"[sim_realtime] {e.Data}"); };
             _simProcess.ErrorDataReceived  += (s, e) => { if (e.Data != null) Debug.LogWarning($"[sim_realtime] {e.Data}"); };
             _simProcess.Start();
             _simProcess.BeginOutputReadLine();
             _simProcess.BeginErrorReadLine();
-            Debug.Log($"[PythonSimDriver] Auto-launched sim_realtime.py in WSL distro '{wslDistro}'. Its output appears above as [sim_realtime] lines.");
+            string where = launchMode == LaunchMode.LocalPython ? $"with {psi.FileName}" : $"in WSL distro '{wslDistro}'";
+            Debug.Log($"[PythonSimDriver] Auto-launched sim_realtime.py {where}. Its output appears above as [sim_realtime] lines.");
         }
         catch (Exception e)
         {
+            if (launchMode == LaunchMode.LocalPython)
+            {
+                Debug.LogError($"[PythonSimDriver] Failed to auto-launch the sim with '{localPython}': {e.Message}. "
+                    + "Make the venv (python -m venv .venv, then .venv/Scripts/pip install -r requirements.txt) "
+                    + "or run it yourself from the repo root: python -m hydrofoil.sim_realtime --host 127.0.0.1");
+                return;
+            }
             Debug.LogError($"[PythonSimDriver] Failed to auto-launch WSL sim: {e.Message}. "
                 + "Falling back to manual: run this yourself —\n"
                 + $"wsl -d {wslDistro} -e bash -lc \"{simCommand}\"");
@@ -248,7 +318,7 @@ public class PythonSimDriver : MonoBehaviour
             // the WSL instance (verified: the Linux-side python survived it) — the
             // WSL VM persists independently of any one wsl.exe invocation. Target
             // it explicitly by name inside WSL too, fire-and-forget.
-            if (autoLaunchSim)
+            if (autoLaunchSim && launchMode == LaunchMode.Wsl)
             {
                 try
                 {
@@ -292,22 +362,44 @@ public class PythonSimDriver : MonoBehaviour
     {
         if (shipTransform == null) return;
 
-        // NED → Unity: x=NED.y, y=-(NED.z) + surfaceY, z=NED.x
-        Vector3 unityPos = new Vector3(p.y, -p.z + waterSurfaceY, p.x);
-        shipTransform.position = unityPos;
+        // NED → Unity: x=NED.y, y=-(NED.z) + surfaceY, z=NED.x, then turned and
+        // moved so the sim's origin and north are the boat's pose in the scene.
+        Quaternion frame = Quaternion.Euler(0f, _anchorYawDeg, 0f);
+        Vector3 cgWorld = _anchorPos + frame * new Vector3(p.y, 0f, p.x);
+        cgWorld.y = -p.z + waterSurfaceY;
 
-        // Euler angles: pitch θ (+nose-up NED) → Unity -X; yaw ψ → +Y; roll φ → +Z.
-        // modelYawOffsetDeg corrects for the hull mesh's authored forward axis.
-        shipTransform.rotation = Quaternion.Euler(
-            -p.theta * Mathf.Rad2Deg,
-             p.psi   * Mathf.Rad2Deg + modelYawOffsetDeg,
-             p.phi   * Mathf.Rad2Deg);
+        // Body attitude in the physics frame (forward +Z, right +X, up +Y).
+        // Quaternion.Euler applies roll, then pitch, then yaw, which matches
+        // NED's ZYX convention. Pitch θ (+nose-up) → -X; yaw ψ (+turn right) → +Y;
+        // roll φ (+right side down) → -Z, since a +Z turn in Unity lifts the right side.
+        // modelYawOffsetDeg corrects the hull mesh's authored forward axis, so it is
+        // applied first, in the model's own frame. Folding it into the yaw angle (as
+        // before) rotated pitch and roll with it: Python's pitch showed as a roll of
+        // the hull and its roll as pitch.
+        shipTransform.rotation = frame
+            * Quaternion.Euler(
+                -p.theta * Mathf.Rad2Deg,
+                 p.psi   * Mathf.Rad2Deg,
+                -p.phi   * Mathf.Rad2Deg)
+            * Quaternion.Euler(0f, modelYawOffsetDeg, 0f);
+
+        // Python's state is the centre of mass; put that point of the model there.
+        shipTransform.position = cgWorld - shipTransform.TransformVector(modelCgOffset);
 
         // Foil flap rotations. d_main is the common (heave) deflection, d_roll is the
         // differential added on top so the two flaps counter-rotate for roll/turn authority.
-        if (leftFoil  != null) leftFoil.localRotation  = Quaternion.Euler(-(p.d_main - p.d_roll), 0, 0);
-        if (rightFoil != null) rightFoil.localRotation = Quaternion.Euler(-(p.d_main + p.d_roll), 0, 0);
-        if (elevatorFoil != null) elevatorFoil.localRotation = Quaternion.Euler(-p.d_elev, 0, 0);
+        // Python's +delta adds angle of attack (trailing edge down). The flaps used to
+        // turn about their local X, which on this hull is the long axis, so they
+        // twisted like ailerons instead of hinging.
+        SetFlap(leftFoil,     _leftFoilRest,  p.d_main - p.d_roll);
+        SetFlap(rightFoil,    _rightFoilRest, p.d_main + p.d_roll);
+        SetFlap(elevatorFoil, _elevFoilRest,  p.d_elev);
+    }
+
+    void SetFlap(Transform flap, Quaternion rest, float deltaDeg)
+    {
+        if (flap == null) return;
+        flap.localRotation = Quaternion.AngleAxis(deltaDeg, flapHingeAxis) * rest;
     }
 
     void UpdateInspector(SimPacket p)
@@ -324,6 +416,8 @@ public class PythonSimDriver : MonoBehaviour
         _draft     = p.draft;
         _foilborne = p.foilborne;
         _waveElev  = p.wave_elev;
+        _thrustScale = p.thrust_scale;
+        _failsafe  = p.failsafe ?? "";
     }
 
     // ── Gizmos ────────────────────────────────────────────────────────────

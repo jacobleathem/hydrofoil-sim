@@ -35,13 +35,25 @@ DEFAULT_PARAMS: dict[str, Any] = {
     "elev_chord": 0.10, "elev_span": 0.3,
     "main_pos_x": 0.0,  "main_pos_z": 0.5, "main_lateral_offset": 0.35,
     "elev_pos_x": -1.2, "elev_pos_z": 0.4,
-    # Heave gains are tuned higher than sim.py's — here the vehicle starts at rest
-    # and must generate real lift to take off, not just trim near an already-flying point.
-    "kp_heave": 15.0, "ki_heave": 1.0, "kd_heave": 5.0,
-    "kp_pitch": 2.0, "ki_pitch": 0.0, "kd_pitch": 2.0,
-    # Ki must stay 0 here — any nonzero integral term reliably diverges under
-    # wave disturbance (verified: Ki=0.05 blew up to 1000+ deg within 90s).
-    "kp_roll":  3.5, "ki_roll":  0.0, "kd_roll":  2.5,
+    # Heave/pitch retuned 2026-11 on the corrected plant (flap effectiveness,
+    # struts). The old 15/1/5 heave set gave ~3 deg of flap for 0.2 m of
+    # height error, so height crept in on the integral: >30 s to reach the
+    # target after takeoff and ~11 s to settle a 0.2 m step. These settle a
+    # 0.2 m step in ~1 s (~2 s in 5 cm waves) with ~2 cm overshoot, and
+    # reach flying height ~6 s from rest. The pitch set (was 2/0/2, i.e.
+    # almost no elevator) holds pitch within ~1 deg through takeoff. The
+    # integrals only run once the hull is clear of the water (pid.py).
+    "kp_heave": 120.0, "ki_heave": 30.0, "kd_heave": 40.0,
+    "kp_pitch": 80.0, "ki_pitch": 0.0, "kd_pitch": 20.0,
+    # Roll gains retuned 2026-11 on the plant with strut side force (the
+    # old 3.5/0/2.5 set gave ~0.5 deg of differential flap for an 8 deg
+    # error and let a held bank drift to 1.3-2x the command). These reach
+    # 90% of a bank step in ~1.1 s, overshoot ~2 deg and settle on the
+    # command; held banks up to 50 deg track in calm water and 5 cm waves at
+    # 6 and 9 m/s. The integral is safe now (the old Ki=0.05 blow-up was on
+    # the strut-less plant) and removes the steady error from the masts'
+    # roll moment in a turn.
+    "kp_roll": 40.0, "ki_roll": 10.0, "kd_roll": 12.0,
     # Target height of the HULL above the water once foilborne [m] (negative =
     # hull still below the surface). Internally converted to a CoG depth
     # reference via hull_offset — this is the number you actually care about.
@@ -390,7 +402,7 @@ const LIVE_GROUPS = [
   { label: "① Flight Target", params: [
     { key:"flying_height", label:"Hull Height Over Water (m)", min:-0.3, max:1.0,  step:0.02 },
     { key:"theta_ref",     label:"Target Pitch (°)",           min:-10,  max:10,   step:0.5  },
-    { key:"phi_ref",       label:"Target Roll (°)",            min:-10,  max:10,   step:0.5  },
+    { key:"phi_ref",       label:"Target Roll (°)",            min:-20,  max:20,   step:0.5  },
   ]},
   { label: "② Propulsion", params: [
     { key:"target_speed", label:"Target Speed (m/s)",  min:0, max:15,  step:0.1 },
@@ -400,19 +412,19 @@ const LIVE_GROUPS = [
     { key:"max_thrust",   label:"Max Thrust (N)",       min:5, max:200, step:5   },
   ]},
   { label: "③ Height Hold (heave PID)", params: [
-    { key:"kp_heave", label:"Kp", min:0, max:20, step:0.1  },
-    { key:"ki_heave", label:"Ki", min:0, max:5,  step:0.01 },
-    { key:"kd_heave", label:"Kd", min:0, max:20, step:0.1  },
+    { key:"kp_heave", label:"Kp", min:0, max:300, step:1    },
+    { key:"ki_heave", label:"Ki", min:0, max:80,  step:0.5  },
+    { key:"kd_heave", label:"Kd", min:0, max:100, step:0.5  },
   ]},
   { label: "④ Pitch Hold", params: [
-    { key:"kp_pitch", label:"Kp", min:0, max:20, step:0.1  },
-    { key:"ki_pitch", label:"Ki", min:0, max:5,  step:0.01 },
-    { key:"kd_pitch", label:"Kd", min:0, max:20, step:0.1  },
+    { key:"kp_pitch", label:"Kp", min:0, max:200, step:1    },
+    { key:"ki_pitch", label:"Ki", min:0, max:50,  step:0.5  },
+    { key:"kd_pitch", label:"Kd", min:0, max:60,  step:0.5  },
   ]},
   { label: "⑤ Roll Hold", params: [
-    { key:"kp_roll",  label:"Kp", min:0, max:20, step:0.1  },
-    { key:"ki_roll",  label:"Ki", min:0, max:5,  step:0.01 },
-    { key:"kd_roll",  label:"Kd", min:0, max:20, step:0.1  },
+    { key:"kp_roll",  label:"Kp", min:0, max:80, step:0.5  },
+    { key:"ki_roll",  label:"Ki", min:0, max:30, step:0.1  },
+    { key:"kd_roll",  label:"Kd", min:0, max:30, step:0.1  },
   ]},
   { label: "⑥ Waves (disturbance)", params: [
     { key:"waves_enabled",   label:"Enable Waves",   type:"checkbox" },
@@ -590,7 +602,7 @@ const HEIGHT_RATE = 0.15;       // m/s while held
 const HEIGHT_MIN = -0.3, HEIGHT_MAX = 1.0;
 const ROLL_RATE = 20.0;         // deg/s while held (turning)
 const ROLL_CENTER_RATE = 15.0;  // deg/s spring-back to level when released
-const ROLL_MAX = 10.0;
+const ROLL_MAX = 20.0;      // same as control_uplink.BANK_MAX
 let lastManualTick = null;
 
 function manualControlTick(now) {

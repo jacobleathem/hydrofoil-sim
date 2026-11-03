@@ -21,6 +21,7 @@ from hydrofoil.forces.foil import (
 )
 from hydrofoil.forces.buoyancy import gravity_force
 from hydrofoil.forces.hull import hull_buoyancy_force, hull_drag_force, hull_draft
+from hydrofoil.forces.strut import Strut
 from hydrofoil.control.pid import HydrofoilController
 from hydrofoil.control.surge import SurgeController
 from hydrofoil.control.actuator import DEFAULT_ACTUATOR_PARAMS
@@ -39,6 +40,16 @@ from hydrofoil.control.actuator import DEFAULT_ACTUATOR_PARAMS
 MAX_ATTITUDE_RAD = np.radians(70.0)   # keeps clear of T_euler's +-90 deg singularity
 MAX_LINEAR_VEL = 15.0                  # m/s
 MAX_ANGULAR_VEL = 3.0                  # rad/s (~172 deg/s)
+
+# Mast chord [m]. Placeholder: the repo has no strut geometry yet; replace
+# with the CAD value.
+DEFAULT_STRUT_CHORD = 0.10
+
+# Adaptive RK4 sub-stepping (see VehiclePhysics._substeps): keep the
+# fastest mast damping rate x sub-step at or below SUBSTEP_TARGET (RK4's
+# stability limit on a real decay is ~2.8), with at most MAX_SUBSTEPS per dt.
+SUBSTEP_TARGET = 1.5
+MAX_SUBSTEPS = 16
 
 
 class VehiclePhysics:
@@ -70,12 +81,38 @@ class VehiclePhysics:
             (p["main_chord"], p["main_span"], p["main_pos_x"]),   # right half
             (p["elev_chord"], p["elev_span"], p["elev_pos_x"]),
         ])
+        polar = FoilTables.naca0009()
+
+        # Front and rear masts: side force, yaw stability and yaw damping —
+        # see forces/strut.py. Each runs from its foil up to the hull bottom
+        # (z = -hull_offset). Optional params: strut_chord (default 0.10 m,
+        # a placeholder until CAD numbers land) and struts_enabled (default
+        # True; False restores the old, nearly yaw-free plant).
+        self.struts = []
+        if p.get("struts_enabled", True):
+            chord = p.get("strut_chord", DEFAULT_STRUT_CHORD)
+            self.struts = [
+                Strut(chord, x=p["main_pos_x"], z_foot=p["main_pos_z"], z_top=-p["hull_offset"], tables=polar),
+                Strut(chord, x=p["elev_pos_x"], z_foot=p["elev_pos_z"], z_top=-p["hull_offset"], tables=polar),
+            ]
+
+        # Sway/yaw added mass of the masts, taken at their wetted length in
+        # level flight at the commanded height. Constant, like the heave/pitch
+        # terms; at rest more of each mast is wetted, which this ignores.
+        z_flight = p["hull_offset"] - p["flying_height"]
+        added_mass_sway = added_inertia_yaw = 0.0
+        for s in self.struts:
+            wetted = float(np.clip(z_flight + s.z_foot, 0.0, s.length))
+            m_a = s.added_mass_sway(wetted)
+            added_mass_sway += m_a
+            added_inertia_yaw += m_a * s.x**2
+
         self.rigid_body = RigidBody(
             mass=p["mass"], I_b=np.diag([p["ixx"], p["iyy"], p["izz"]]),
             added_mass_heave=added_mass_heave, added_inertia_pitch=added_inertia_pitch,
+            added_mass_sway=added_mass_sway, added_inertia_yaw=added_inertia_yaw,
         )
 
-        polar = FoilTables.naca0009()
         # Main wing modeled as two independently-flapped halves, offset
         # laterally — this is what lets delta_roll produce a rolling moment
         # (asymmetric lift x lateral offset); the existing 6-DOF dynamics
@@ -144,6 +181,40 @@ class VehiclePhysics:
         world_z = eta[2] + (R @ foil.r_attach)[2]
         return (world_z - water_surface_z) / foil.geometry.chord
 
+    def _substeps(self, state, water_surface_z, dt) -> int:
+        """
+        How many RK4 sub-steps one dt needs to stay numerically stable.
+
+        The masts' side force damps sway, yaw and roll very hard: at speed,
+        with the hull low and the rear mast fully wet, a yaw disturbance dies
+        out in a few milliseconds (rear mast 1.2 m aft, small yaw inertia).
+        That's real physics, but RK4 at dt = 0.01 s goes unstable once
+        (damping rate x step) passes ~2.8, which happened from about 7 m/s
+        and let the state explode to the clamps. This estimates the fastest
+        damping rate from each mast's side-force slope and splits the step
+        so rate x sub-step stays <= SUBSTEP_TARGET. Cruising shallow it is
+        usually 1; it only grows when the masts are deep and fast.
+        """
+        if not self.struts:
+            return 1
+        eta, nu = state[:6], state[6:]
+        M = self.rigid_body.M
+        speed = abs(nu[0]) + abs(nu[1])
+        k_sum = k_yaw = k_roll = 0.0
+        for s in self.struts:
+            wetted = s.wetted_length(eta, water_surface_z)
+            if wetted < 1e-3:
+                continue
+            ar = wetted / s.chord
+            # d(side force)/d(side velocity) [N per m/s] at small sideslip
+            k = 0.5 * s.rho * speed * s.chord * wetted * s.cl_alpha_rad * ar / (ar + 2.0)
+            z_cp = s.z_foot - wetted / 2.0
+            k_sum += k
+            k_yaw += k * s.x**2
+            k_roll += k * z_cp**2
+        rate = max(k_sum / M[1, 1], k_yaw / M[5, 5], k_roll / M[3, 3])
+        return int(min(MAX_SUBSTEPS, max(1, np.ceil(rate * dt / SUBSTEP_TARGET))))
+
     def physics_rhs(self, state, cmds, thrust, water_surface_z, wave_vel_body):
         p = self.params
         eta, nu = state[:6], state[6:]
@@ -160,6 +231,8 @@ class VehiclePhysics:
         tau += self.elev_foil.generalized_force(
             nu_rel, delta=cmds["delta_elev"],
             submergence_over_chord=self._submergence_over_chord(self.elev_foil, eta, water_surface_z))
+        for strut in self.struts:
+            tau += strut.generalized_force(nu_rel, eta, water_surface_z)
         tau += hull_buoyancy_force(eta, p["hull_offset"], p["waterplane_area"], p["max_draft"],
                                     water_surface_z=water_surface_z)
         tau += gravity_force(p["mass"], eta)
@@ -185,24 +258,43 @@ class VehiclePhysics:
         eta, nu = state[:6], state[6:]
 
         z_ref = p["hull_offset"] - p["flying_height"]
+        wave_elev, water_surface_z, wave_vel_body = self._wave_state(eta, t, wave)
+        foilborne = hull_draft(eta, p["hull_offset"], p["max_draft"], water_surface_z) <= 0.0
         # phi_ref/theta_ref are stored in degrees (UI convention); eta's
         # angles are radians (Fossen convention) — convert before compare.
         cmds = self.controller.update(
             z_ref,                       eta[2],
             np.radians(p["phi_ref"]),    eta[3],
             np.radians(p["theta_ref"]),  eta[4],
+            foilborne=foilborne,
         )
         thrust = self.surge.update(p["target_speed"], nu[0])
-        wave_elev, water_surface_z, wave_vel_body = self._wave_state(eta, t, wave)
+        # Failsafe ramp-down (see control_uplink.ThrottleFailsafe): 1 = live,
+        # 0 = motors off. While cut, thrust only winds down: no reverse
+        # thrust, even though the pilot's cut also sends target_speed 0, which
+        # on its own makes the surge PID brake. Hold the surge PID reset while
+        # fully cut so it doesn't wind up and lurch when thrust comes back.
+        thrust_scale = p.get("thrust_scale", 1.0)
+        if thrust_scale < 1.0:
+            thrust = max(0.0, thrust) * thrust_scale
+        if thrust_scale <= 0.0:
+            self.surge.reset()
 
         def rhs(s):
             return self.physics_rhs(s, cmds, thrust, water_surface_z, wave_vel_body)
 
-        k1 = rhs(state)
-        k2 = rhs(state + dt / 2 * k1)
-        k3 = rhs(state + dt / 2 * k2)
-        k4 = rhs(state + dt * k3)
-        new_state = state + dt / 6 * (k1 + 2 * k2 + 2 * k3 + k4)
+        # The controller runs once per dt; the physics may take several
+        # RK4 sub-steps inside it. See _substeps() for why.
+        n = self._substeps(state, water_surface_z, dt)
+        h = dt / n
+        new_state = state
+        for _ in range(n):
+            k1 = rhs(new_state)
+            k2 = rhs(new_state + h / 2 * k1)
+            k3 = rhs(new_state + h / 2 * k2)
+            k4 = rhs(new_state + h * k3)
+            new_state = new_state + h / 6 * (k1 + 2 * k2 + 2 * k3 + k4)
+        self.last_substeps = n
 
         if not np.all(np.isfinite(new_state)):
             # Recovered, not ignored: snap back to the last valid state with

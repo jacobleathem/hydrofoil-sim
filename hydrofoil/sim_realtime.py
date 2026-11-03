@@ -24,12 +24,14 @@ import time
 from hydrofoil.waves.airy import CalmWater, AiryWave
 from hydrofoil.vehicle import VehiclePhysics
 from hydrofoil.stream import SimStreamer
-from hydrofoil.control_uplink import PilotUplink
+from hydrofoil.control_uplink import PilotUplink, ThrottleFailsafe
 from hydrofoil.dashboard import DEFAULT_PARAMS
 
 
 def run_realtime(speed: float = 1.0, streamer: SimStreamer | None = None,
-                 wave=None, duration: float = 60.0, pilot_port: int = 5006):
+                 wave=None, duration: float = 60.0, pilot_port: int = 5006,
+                 link_timeout: float = 0.5, failsafe_ramp: float = 1.0,
+                 require_pilot: bool = False):
     """
     Run the simulation in real time, stream state to Unity, and accept
     pilot climb/dive input from Unity over UDP.
@@ -41,6 +43,9 @@ def run_realtime(speed: float = 1.0, streamer: SimStreamer | None = None,
     wave       : wave model (CalmWater() if None)
     duration   : total run duration [s]
     pilot_port : UDP port to listen for pilot input on
+    link_timeout  : seconds without a pilot packet before thrust is cut
+    failsafe_ramp : seconds for thrust to ramp to zero when cut
+    require_pilot : keep thrust cut until the first pilot packet arrives
     """
     if wave is None:
         wave = CalmWater()
@@ -57,6 +62,8 @@ def run_realtime(speed: float = 1.0, streamer: SimStreamer | None = None,
                         initial_target_speed=params["target_speed"],
                         initial_phi_ref=params["phi_ref"])
     pilot.start()
+    failsafe = ThrottleFailsafe(link_timeout=link_timeout, ramp_time=failsafe_ramp,
+                                require_pilot=require_pilot)
 
     t = 0.0
     step_wall = dt / speed          # wall-clock seconds per sim step
@@ -73,7 +80,16 @@ def run_realtime(speed: float = 1.0, streamer: SimStreamer | None = None,
 
             params["flying_height"] = pilot.flying_height   # read fresh, same pattern as dashboard.py
             params["target_speed"] = pilot.target_speed     # throttle — feeds the surge PID, not a direct force
-            params["phi_ref"] = pilot.phi_ref                # bank target — feeds the roll PID (clamped +-8deg)
+            params["phi_ref"] = pilot.phi_ref                # bank target — feeds the roll PID (clamped +-20deg)
+            was_cut = failsafe.reason
+            params["thrust_scale"] = failsafe.update(dt, pilot.armed, pilot.deadman,
+                                                     pilot.seconds_since_packet())
+            if failsafe.reason != was_cut:
+                if failsafe.reason:
+                    action = "thrust cut" if failsafe.scale <= 0.0 else f"thrust ramping to 0 over {failsafe_ramp:.1f}s"
+                    print(f"t={t:5.1f}s  FAILSAFE: {failsafe.reason} - {action}")
+                else:
+                    print(f"t={t:5.1f}s  failsafe cleared ({was_cut}) - thrust live")
             state, cmds, thrust, draft, wave_elev = vp.step(state, t, wave)
             t += dt
             step_count += 1
@@ -82,7 +98,8 @@ def run_realtime(speed: float = 1.0, streamer: SimStreamer | None = None,
 
             if step_count % stream_every == 0:
                 streamer.send(t, state[:6], state[6:], cmds,
-                              thrust=thrust, draft=draft, foilborne=foilborne, wave_elev=wave_elev)
+                              thrust=thrust, draft=draft, foilborne=foilborne, wave_elev=wave_elev,
+                              thrust_scale=params["thrust_scale"], failsafe=failsafe.reason)
 
             if step_count % int(1.0 / dt) == 0:
                 z = state[2]
@@ -114,9 +131,13 @@ if __name__ == "__main__":
     parser.add_argument("--pilot-port", type=int,   default=5006,  help="UDP port for pilot input from Unity")
     parser.add_argument("--duration",   type=float, default=60.0,  help="Run duration [s]")
     parser.add_argument("--waves",      action="store_true",        help="Enable wave disturbance")
+    parser.add_argument("--link-timeout", type=float, default=0.5, help="Seconds without pilot input before thrust is cut")
+    parser.add_argument("--failsafe-ramp", type=float, default=1.0, help="Seconds for thrust to ramp to zero when cut")
+    parser.add_argument("--require-pilot", action="store_true", help="Keep thrust cut until the first pilot packet arrives")
     args = parser.parse_args()
 
     wave = AiryWave(amplitude=0.05, wavelength=5.0, period=2.0) if args.waves else CalmWater()
     streamer = SimStreamer(host=args.host, port=args.port)
     run_realtime(speed=args.speed, streamer=streamer, wave=wave, duration=args.duration,
-                 pilot_port=args.pilot_port)
+                 pilot_port=args.pilot_port, link_timeout=args.link_timeout,
+                 failsafe_ramp=args.failsafe_ramp, require_pilot=args.require_pilot)
