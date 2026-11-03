@@ -190,6 +190,11 @@ are load-bearing constraints for anything built on top of this sim:
   ~6s even in calm water. This is why pilot bank input is hard-clamped to
   **±8°** in both `control_uplink.py` (`BANK_MIN/MAX`) and `dashboard.py`'s
   JS stick handler (`ROLL_MAX`) — do not widen without re-running the sweep.
+  **Update 2026-11:** superseded. With strut side force
+  (`forces/strut.py`) and roll gains retuned to Kp 40 / Ki 10 / Kd 12, held
+  banks up to 30° settle on the command (calm and 5 cm waves, 6 and 9 m/s)
+  and 40° does not; the cap is now **±20°** in `control_uplink.py`,
+  `dashboard.py` and Unity's `PilotInput`.
 - **Rapid multi-axis combined pilot input** (bank + height + speed all
   changing chaotically at once) can still diverge to NaN/Inf even within the
   ±8° bank cap — found via randomized fuzz testing after a real Unity crash

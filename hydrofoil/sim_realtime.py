@@ -80,7 +80,7 @@ def run_realtime(speed: float = 1.0, streamer: SimStreamer | None = None,
 
             params["flying_height"] = pilot.flying_height   # read fresh, same pattern as dashboard.py
             params["target_speed"] = pilot.target_speed     # throttle — feeds the surge PID, not a direct force
-            params["phi_ref"] = pilot.phi_ref                # bank target — feeds the roll PID (clamped +-8deg)
+            params["phi_ref"] = pilot.phi_ref                # bank target — feeds the roll PID (clamped +-20deg)
             was_cut = failsafe.reason
             params["thrust_scale"] = failsafe.update(dt, pilot.armed, pilot.deadman,
                                                      pilot.seconds_since_packet())

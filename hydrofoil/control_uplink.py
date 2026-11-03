@@ -13,13 +13,13 @@ chases), and bank (phi_ref, what the roll PID chases). All are targets fed
 to the existing closed-loop PIDs, not raw direct forces — the pilot flies
 "through" the autopilot, same architecture on every axis.
 
-BANK_MIN/MAX are deliberately tight (+-8 deg), not a UI nicety: the
-closed-loop roll axis is only verified stable for a *commanded* bank up to
-~10 deg (headless swept 0-30 deg — 12 deg reliably diverges to overflow
-within ~6s, even in calm water). A held bank converges to roughly 1.3-1.5x
-the commanded angle (P-only roll loop, no integral — see vehicle.py/pid.py
-for why Ki must stay 0) and yaw builds continuously, i.e. a real coordinated
-turn — that part is correct, not a bug. Do not widen this range without
+BANK_MIN/MAX (+-20 deg) are a safety margin, not a UI nicety. With strut
+side force in the plant and the retuned roll gains (dashboard.DEFAULT_PARAMS),
+a held bank was swept headless from 8 to 40 deg, in calm water and 5 cm
+waves, at 6 and 9 m/s: everything up to 30 deg settles on the command, and
+40 deg ran away to the attitude clamp in waves at 9 m/s. 20 deg keeps half
+of that margin. (The old cap was +-8 deg: on the strut-less plant with the
+old P-only gains, 12 deg diverged.) Do not widen this range without
 re-running that sweep.
 
 Failsafe: packets may also carry "armed" and "deadman" booleans (Unity's
@@ -37,7 +37,7 @@ import time
 
 HEIGHT_MIN, HEIGHT_MAX = -0.3, 1.0    # same clamp range as the dashboard's slider
 SPEED_MIN, SPEED_MAX = 0.0, 10.0      # m/s — 0 lets you feel it sink with no lift
-BANK_MIN, BANK_MAX = -8.0, 8.0        # deg — see module docstring for why this is tight
+BANK_MIN, BANK_MAX = -20.0, 20.0      # deg — see module docstring for where this comes from
 
 
 class PilotUplink:

@@ -49,10 +49,10 @@ is what receives state from `sim_realtime.py` over UDP and drives the scene;
 ## Known state / heads-up for anyone picking this up
 
 - Control is three independent PID loops (heave/pitch/roll), not yet a MIMO
-  controller — see `hydrofoil/control/pid.py`. Roll `Ki` must stay `0`
-  (verified to diverge otherwise under wave disturbance). Pilot bank input
-  is clamped to ±8° (`hydrofoil/control_uplink.py`) — commanded bank beyond
-  that has been verified to diverge.
+  controller — see `hydrofoil/control/pid.py`. Roll gains were retuned on
+  the plant with strut side force (`hydrofoil/forces/strut.py`). Pilot bank
+  input is clamped to ±20° (`hydrofoil/control_uplink.py`); held banks up to
+  30° were verified stable, 40° was not.
 - The foil force model (`hydrofoil/forces/foil.py`) includes flap
   effectiveness, finite-span, free-surface, and induced-drag corrections.
   PID gains have **not** been retuned against these corrections yet — expect

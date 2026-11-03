@@ -30,13 +30,12 @@ public class PilotInput : MonoBehaviour
     public const float SPEED_RATE = 1.0f;      // m/s of target per second held
     public const float SPEED_MIN = 0.0f;       // 0 = no lift possible — this is how you feel gravity win
     public const float SPEED_MAX = 10.0f;
-    // Bank range is deliberately tight — the roll PID (server-side) is only
-    // verified stable for a commanded bank up to ~10 deg; 12 deg reliably
-    // diverges (see control_uplink.py's BANK_MIN/MAX docstring). Don't widen
-    // this without re-verifying there too.
-    public const float BANK_RATE = 6.0f;       // deg of target per second held
-    public const float BANK_MIN = -8.0f;
-    public const float BANK_MAX = 8.0f;
+    // Bank range matches control_uplink.py's BANK_MIN/MAX: the Python roll
+    // loop is verified to 30 deg held, so 20 deg keeps a margin. Don't widen
+    // this without re-running that sweep (see its docstring).
+    public const float BANK_RATE = 15.0f;      // deg of target per second held
+    public const float BANK_MIN = -20.0f;
+    public const float BANK_MAX = 20.0f;
     public const float BANK_RETURN_RATE = 10.0f;  // deg/s bank relaxes toward 0 when A/D released
     public const float ARM_MAX_SPEED = 0.05f;  // lever must be at (about) zero to arm
 
