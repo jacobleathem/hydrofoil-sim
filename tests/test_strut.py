@@ -124,3 +124,76 @@ def test_struts_enabled_adds_sway_and_yaw_added_mass():
     without = VehiclePhysics(dict(DEFAULT_PARAMS, struts_enabled=False)).rigid_body.M
     assert with_s[1, 1] > without[1, 1] == DEFAULT_PARAMS["mass"]
     assert with_s[5, 5] > without[5, 5] == DEFAULT_PARAMS["izz"]
+
+
+# ── Stall, stiffness and the retuned controller ──────────────────────────
+
+def test_section_is_symmetric_and_stalls_past_the_table():
+    s = _strut()
+    cl_pos, cd_pos = s.section_coefficients(8.0)
+    cl_neg, cd_neg = s.section_coefficients(-8.0)
+    assert cl_neg == pytest.approx(-cl_pos) and cd_neg == pytest.approx(cd_pos)
+    # Way past stall: much less lift than the table's peak, lots of drag,
+    # and no lift at all broadside.
+    cl_45, cd_45 = s.section_coefficients(45.0)
+    assert cl_45 < POLAR.CL.max() and cd_45 > 0.9
+    assert s.section_coefficients(90.0)[0] == pytest.approx(0.0, abs=1e-9)
+
+
+def test_stalled_strut_does_not_push_the_boat_forward():
+    # 50 deg of sideslip: before the stall model this gave a forward
+    # (propulsive) force and a hard-rolling boat could scull to 15 m/s.
+    u, v = 6.0 * np.cos(np.radians(50)), 6.0 * np.sin(np.radians(50))
+    tau = _strut().generalized_force(_nu(u=u, v=v), _eta())
+    V_hat = np.array([u, v, 0.0]) / 6.0
+    assert tau[:3] @ V_hat < 0.0          # never adds energy along the flow
+
+
+def test_substeps_grow_with_speed_and_wetted_length():
+    vp = VehiclePhysics(dict(DEFAULT_PARAMS))
+    cruise = np.concatenate([_eta(z=0.05), _nu(u=6.0)])
+    deep_fast = np.concatenate([_eta(z=0.55), _nu(u=12.0)])
+    assert vp._substeps(cruise, 0.0, 0.01) <= 2
+    assert vp._substeps(deep_fast, 0.0, 0.01) > vp._substeps(cruise, 0.0, 0.01)
+    assert VehiclePhysics(dict(DEFAULT_PARAMS, struts_enabled=False))._substeps(deep_fast, 0.0, 0.01) == 1
+
+
+def test_fast_with_hull_low_stays_bounded():
+    # Regression: at ~8 m/s with the hull low and both masts fully wet, a
+    # single dt = 0.01 RK4 step went unstable in yaw and the state blew up
+    # to the clamps.
+    params = dict(DEFAULT_PARAMS, target_speed=9.0, flying_height=-0.1, phi_ref=15.0)
+    vp = VehiclePhysics(params)
+    state = np.concatenate([_eta(z=0.6), _nu(u=8.5, v=0.3, r=0.3)])
+    water = CalmWater()
+    for i in range(1000):
+        state, *_ = vp.step(state, i * 0.01, water)
+        assert abs(state[11]) < 2.0 and state[6] < 11.0
+
+
+def test_integrals_are_held_while_the_hull_is_in_the_water():
+    # Sitting at rest below flying height, the heave error never goes away.
+    # The integral must not build on it (the proportional term alone may
+    # still hold the flap at its limit, which helps takeoff and unwinds at
+    # once).
+    params = dict(DEFAULT_PARAMS, target_speed=0.0)
+    vp = VehiclePhysics(params)
+    state, water = vp.rest_state(), CalmWater()
+    for i in range(3000):
+        state, *_ = vp.step(state, i * 0.01, water)
+    assert vp.controller.heave_pid._integral == 0.0
+    assert vp.controller.pitch_pid._integral == 0.0
+
+
+def test_height_step_settles_quickly():
+    params = dict(DEFAULT_PARAMS, target_speed=6.0)
+    vp = VehiclePhysics(params)
+    state, t, water = vp.rest_state(), 0.0, CalmWater()
+    hull_height = []
+    while t < 25.0:
+        params["flying_height"] = 0.55 if t < 15.0 else 0.35
+        state, *_ = vp.step(state, t, water)
+        t += params["dt"]
+        if t > 17.0:
+            hull_height.append(params["hull_offset"] - state[2])
+    assert np.max(np.abs(np.array(hull_height) - 0.35)) < 0.03

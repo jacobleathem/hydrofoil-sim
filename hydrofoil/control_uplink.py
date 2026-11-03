@@ -15,11 +15,12 @@ to the existing closed-loop PIDs, not raw direct forces — the pilot flies
 
 BANK_MIN/MAX (+-20 deg) are a safety margin, not a UI nicety. With strut
 side force in the plant and the retuned roll gains (dashboard.DEFAULT_PARAMS),
-a held bank was swept headless from 8 to 40 deg, in calm water and 5 cm
-waves, at 6 and 9 m/s: everything up to 30 deg settles on the command, and
-40 deg ran away to the attitude clamp in waves at 9 m/s. 20 deg keeps half
-of that margin. (The old cap was +-8 deg: on the strut-less plant with the
-old P-only gains, 12 deg diverged.) Do not widen this range without
+a held bank was swept headless from 8 to 50 deg, in calm water and 5 cm
+waves, at 6 and 9 m/s, and every case settles on the command. The cap is
+kept at 20 deg anyway: past that, the raised half of the main foil gets
+close to the surface (ventilation isn't modelled) and the sweep says nothing
+about the real boat. (The old cap was +-8 deg: on the strut-less plant with
+the old P-only gains, 12 deg diverged.) Do not widen this range without
 re-running that sweep.
 
 Failsafe: packets may also carry "armed" and "deadman" booleans (Unity's

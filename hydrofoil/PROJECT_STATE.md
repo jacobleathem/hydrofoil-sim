@@ -192,9 +192,14 @@ are load-bearing constraints for anything built on top of this sim:
   JS stick handler (`ROLL_MAX`) — do not widen without re-running the sweep.
   **Update 2026-11:** superseded. With strut side force
   (`forces/strut.py`) and roll gains retuned to Kp 40 / Ki 10 / Kd 12, held
-  banks up to 30° settle on the command (calm and 5 cm waves, 6 and 9 m/s)
-  and 40° does not; the cap is now **±20°** in `control_uplink.py`,
-  `dashboard.py` and Unity's `PilotInput`.
+  banks up to 50° settle on the command (calm and 5 cm waves, 6 and 9 m/s);
+  the cap is now **±20°** in `control_uplink.py`, `dashboard.py` and Unity's
+  `PilotInput`, leaving margin for foil ventilation, which isn't modelled.
+  Heave/pitch were retuned at the same time (120/30/40, 80/0/20), the PID
+  integrals only run once the hull is clear of the water, and
+  `VehiclePhysics.step` sub-steps RK4 when the masts' damping gets stiff.
+  The randomized combined-input fuzz (bank ±20°, height -0.3..1.0 m, speed
+  3..10 m/s, waves, 5 seeds x 150 s) now runs with zero clamp hits.
 - **Rapid multi-axis combined pilot input** (bank + height + speed all
   changing chaotically at once) can still diverge to NaN/Inf even within the
   ±8° bank cap — found via randomized fuzz testing after a real Unity crash
