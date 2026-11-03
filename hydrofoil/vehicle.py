@@ -45,6 +45,12 @@ MAX_ANGULAR_VEL = 3.0                  # rad/s (~172 deg/s)
 # with the CAD value.
 DEFAULT_STRUT_CHORD = 0.10
 
+# Adaptive RK4 sub-stepping (see VehiclePhysics._substeps): keep the
+# fastest mast damping rate x sub-step at or below SUBSTEP_TARGET (RK4's
+# stability limit on a real decay is ~2.8), with at most MAX_SUBSTEPS per dt.
+SUBSTEP_TARGET = 1.5
+MAX_SUBSTEPS = 16
+
 
 class VehiclePhysics:
     """
@@ -175,6 +181,40 @@ class VehiclePhysics:
         world_z = eta[2] + (R @ foil.r_attach)[2]
         return (world_z - water_surface_z) / foil.geometry.chord
 
+    def _substeps(self, state, water_surface_z, dt) -> int:
+        """
+        How many RK4 sub-steps one dt needs to stay numerically stable.
+
+        The masts' side force damps sway, yaw and roll very hard: at speed,
+        with the hull low and the rear mast fully wet, a yaw disturbance dies
+        out in a few milliseconds (rear mast 1.2 m aft, small yaw inertia).
+        That's real physics, but RK4 at dt = 0.01 s goes unstable once
+        (damping rate x step) passes ~2.8, which happened from about 7 m/s
+        and let the state explode to the clamps. This estimates the fastest
+        damping rate from each mast's side-force slope and splits the step
+        so rate x sub-step stays <= SUBSTEP_TARGET. Cruising shallow it is
+        usually 1; it only grows when the masts are deep and fast.
+        """
+        if not self.struts:
+            return 1
+        eta, nu = state[:6], state[6:]
+        M = self.rigid_body.M
+        speed = abs(nu[0]) + abs(nu[1])
+        k_sum = k_yaw = k_roll = 0.0
+        for s in self.struts:
+            wetted = s.wetted_length(eta, water_surface_z)
+            if wetted < 1e-3:
+                continue
+            ar = wetted / s.chord
+            # d(side force)/d(side velocity) [N per m/s] at small sideslip
+            k = 0.5 * s.rho * speed * s.chord * wetted * s.cl_alpha_rad * ar / (ar + 2.0)
+            z_cp = s.z_foot - wetted / 2.0
+            k_sum += k
+            k_yaw += k * s.x**2
+            k_roll += k * z_cp**2
+        rate = max(k_sum / M[1, 1], k_yaw / M[5, 5], k_roll / M[3, 3])
+        return int(min(MAX_SUBSTEPS, max(1, np.ceil(rate * dt / SUBSTEP_TARGET))))
+
     def physics_rhs(self, state, cmds, thrust, water_surface_z, wave_vel_body):
         p = self.params
         eta, nu = state[:6], state[6:]
@@ -241,11 +281,18 @@ class VehiclePhysics:
         def rhs(s):
             return self.physics_rhs(s, cmds, thrust, water_surface_z, wave_vel_body)
 
-        k1 = rhs(state)
-        k2 = rhs(state + dt / 2 * k1)
-        k3 = rhs(state + dt / 2 * k2)
-        k4 = rhs(state + dt * k3)
-        new_state = state + dt / 6 * (k1 + 2 * k2 + 2 * k3 + k4)
+        # The controller runs once per dt; the physics may take several
+        # RK4 sub-steps inside it. See _substeps() for why.
+        n = self._substeps(state, water_surface_z, dt)
+        h = dt / n
+        new_state = state
+        for _ in range(n):
+            k1 = rhs(new_state)
+            k2 = rhs(new_state + h / 2 * k1)
+            k3 = rhs(new_state + h / 2 * k2)
+            k4 = rhs(new_state + h * k3)
+            new_state = new_state + h / 6 * (k1 + 2 * k2 + 2 * k3 + k4)
+        self.last_substeps = n
 
         if not np.all(np.isfinite(new_state)):
             # Recovered, not ignored: snap back to the last valid state with

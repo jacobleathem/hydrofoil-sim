@@ -60,6 +60,9 @@ class Strut:
         self.tables = tables
         self.rho = rho
         self.oswald_efficiency = oswald_efficiency
+        # Section lift slope [per rad], for estimating how stiff the side
+        # force is (VehiclePhysics sizes its integration sub-steps from it).
+        self.cl_alpha_rad = float(np.degrees(tables.cl_slope_per_deg))
 
     def wetted_length(self, eta: np.ndarray, water_surface_z: float) -> float:
         """
@@ -78,6 +81,25 @@ class Strut:
     def added_mass_sway(self, wetted_length: float) -> float:
         """Sway added mass [kg] of a flat plate of this chord moving broadside: rho*pi*c^2/4 per metre."""
         return self.rho * np.pi * self.chord**2 / 4.0 * wetted_length
+
+    def section_coefficients(self, beta_deg: float) -> tuple[float, float]:
+        """
+        Section CL and CD at sideslip beta [deg], for any beta in [-90, 90].
+
+        The strut section is symmetric, so negative angles mirror the
+        positive side of the polar (the table only reaches -10 deg on that
+        side). Past the end of the table the section is stalled and is
+        treated as a flat plate: CL = sin(2b), CD = 2 sin^2(b). Clamping the
+        table there instead kept full un-stalled lift at 40-60 deg of slip;
+        tilted that far the "lift" points mostly forward, and a hard-rolling
+        boat could scull itself up to the speed clamp.
+        """
+        b = abs(beta_deg)
+        sign = 1.0 if beta_deg >= 0.0 else -1.0
+        if b <= self.tables.aoa_max:
+            return sign * self.tables.cl(b), self.tables.cd(b)
+        rad = np.radians(min(b, 90.0))
+        return sign * float(np.sin(2.0 * rad)), float(2.0 * np.sin(rad) ** 2)
 
     def generalized_force(self, nu: np.ndarray, eta: np.ndarray,
                           water_surface_z: float = 0.0) -> np.ndarray:
@@ -113,8 +135,9 @@ class Strut:
         # act roughly as end plates, so take the wetted length as the full
         # effective span.
         aspect_ratio = wetted / self.chord
-        CL = self.tables.cl(beta_deg) * aspect_ratio / (aspect_ratio + 2.0)
-        CD = self.tables.cd(beta_deg) + CL**2 / (np.pi * aspect_ratio * self.oswald_efficiency)
+        cl_2d, cd_2d = self.section_coefficients(beta_deg)
+        CL = cl_2d * aspect_ratio / (aspect_ratio + 2.0)
+        CD = cd_2d + CL**2 / (np.pi * aspect_ratio * self.oswald_efficiency)
 
         q = 0.5 * self.rho * speed**2
         A = self.chord * wetted
