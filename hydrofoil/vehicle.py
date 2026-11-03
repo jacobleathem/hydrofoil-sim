@@ -193,6 +193,16 @@ class VehiclePhysics:
             np.radians(p["theta_ref"]),  eta[4],
         )
         thrust = self.surge.update(p["target_speed"], nu[0])
+        # Failsafe ramp-down (see control_uplink.ThrottleFailsafe): 1 = live,
+        # 0 = motors off. While cut, thrust only winds down: no reverse
+        # thrust, even though the pilot's cut also sends target_speed 0, which
+        # on its own makes the surge PID brake. Hold the surge PID reset while
+        # fully cut so it doesn't wind up and lurch when thrust comes back.
+        thrust_scale = p.get("thrust_scale", 1.0)
+        if thrust_scale < 1.0:
+            thrust = max(0.0, thrust) * thrust_scale
+        if thrust_scale <= 0.0:
+            self.surge.reset()
         wave_elev, water_surface_z, wave_vel_body = self._wave_state(eta, t, wave)
 
         def rhs(s):
