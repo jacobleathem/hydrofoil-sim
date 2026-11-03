@@ -16,8 +16,10 @@ lifting surfaces' geometry. This is a deliberate exception to the usual
 "added by the caller" split: Fossen's nu_dot solve is against a single
 combined M = M_RB + M_A, so keeping the diagonal M_A terms in the same
 matrix M_RB builds gets callers a correct combined solve for free.
-Off-diagonal terms and surge/sway/yaw added mass are NOT modeled — only
-M[2,2] (heave) and M[4,4] (pitch). Damping (D) is still added by the caller.
+Off-diagonal terms and surge added mass are NOT modeled — only M[1,1]
+(sway), M[2,2] (heave), M[4,4] (pitch) and M[5,5] (yaw). The sway/yaw terms
+come from the struts (see forces/strut.py). Damping (D) is still added by the
+caller.
 """
 
 import numpy as np
@@ -79,10 +81,13 @@ class RigidBody:
                         typically from strip_added_mass_heave_pitch()
     added_inertia_pitch : diagonal M[4,4] hydrodynamic added inertia
                         [kg*m^2], typically from strip_added_mass_heave_pitch()
+    added_mass_sway     : diagonal M[1,1] hydrodynamic added mass [kg]
+    added_inertia_yaw   : diagonal M[5,5] hydrodynamic added inertia [kg*m^2]
     """
 
     def __init__(self, mass: float, I_b: np.ndarray, r_g: np.ndarray = None,
-                 added_mass_heave: float = 0.0, added_inertia_pitch: float = 0.0):
+                 added_mass_heave: float = 0.0, added_inertia_pitch: float = 0.0,
+                 added_mass_sway: float = 0.0, added_inertia_yaw: float = 0.0):
         self.mass = mass
         self.I_b = np.asarray(I_b, dtype=float)
         self.r_g = np.zeros(3) if r_g is None else np.asarray(r_g, dtype=float)
@@ -92,6 +97,8 @@ class RigidBody:
         # behavior.
         self.added_mass_heave = added_mass_heave
         self.added_inertia_pitch = added_inertia_pitch
+        self.added_mass_sway = added_mass_sway
+        self.added_inertia_yaw = added_inertia_yaw
         self._M = self._build_M()
 
     def _build_M(self) -> np.ndarray:
@@ -106,12 +113,14 @@ class RigidBody:
 
         # --- Hydrodynamic added mass (M_A), diagonal only ---------------------
         # Folded into the same combined mass matrix Fossen's nu_dot solve
-        # uses (M = M_RB + M_A) — see module docstring. Only heave (index 2,
-        # Z) and pitch (index 4, M) are modeled; surge, sway, and yaw added
-        # mass are NOT modeled (these default to 0, so this is a no-op
-        # unless the caller supplies them).
+        # uses (M = M_RB + M_A) — see module docstring. Sway (index 1),
+        # heave (2), pitch (4) and yaw (5) are modeled; surge added mass is
+        # NOT (these all default to 0, so this is a no-op unless the caller
+        # supplies them).
+        M[1, 1] += self.added_mass_sway
         M[2, 2] += self.added_mass_heave
         M[4, 4] += self.added_inertia_pitch
+        M[5, 5] += self.added_inertia_yaw
 
         return M
 

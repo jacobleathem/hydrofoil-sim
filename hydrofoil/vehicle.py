@@ -21,6 +21,7 @@ from hydrofoil.forces.foil import (
 )
 from hydrofoil.forces.buoyancy import gravity_force
 from hydrofoil.forces.hull import hull_buoyancy_force, hull_drag_force, hull_draft
+from hydrofoil.forces.strut import Strut
 from hydrofoil.control.pid import HydrofoilController
 from hydrofoil.control.surge import SurgeController
 from hydrofoil.control.actuator import DEFAULT_ACTUATOR_PARAMS
@@ -39,6 +40,10 @@ from hydrofoil.control.actuator import DEFAULT_ACTUATOR_PARAMS
 MAX_ATTITUDE_RAD = np.radians(70.0)   # keeps clear of T_euler's +-90 deg singularity
 MAX_LINEAR_VEL = 15.0                  # m/s
 MAX_ANGULAR_VEL = 3.0                  # rad/s (~172 deg/s)
+
+# Mast chord [m]. Placeholder: the repo has no strut geometry yet; replace
+# with the CAD value.
+DEFAULT_STRUT_CHORD = 0.10
 
 
 class VehiclePhysics:
@@ -70,12 +75,38 @@ class VehiclePhysics:
             (p["main_chord"], p["main_span"], p["main_pos_x"]),   # right half
             (p["elev_chord"], p["elev_span"], p["elev_pos_x"]),
         ])
+        polar = FoilTables.naca0009()
+
+        # Front and rear masts: side force, yaw stability and yaw damping —
+        # see forces/strut.py. Each runs from its foil up to the hull bottom
+        # (z = -hull_offset). Optional params: strut_chord (default 0.10 m,
+        # a placeholder until CAD numbers land) and struts_enabled (default
+        # True; False restores the old, nearly yaw-free plant).
+        self.struts = []
+        if p.get("struts_enabled", True):
+            chord = p.get("strut_chord", DEFAULT_STRUT_CHORD)
+            self.struts = [
+                Strut(chord, x=p["main_pos_x"], z_foot=p["main_pos_z"], z_top=-p["hull_offset"], tables=polar),
+                Strut(chord, x=p["elev_pos_x"], z_foot=p["elev_pos_z"], z_top=-p["hull_offset"], tables=polar),
+            ]
+
+        # Sway/yaw added mass of the masts, taken at their wetted length in
+        # level flight at the commanded height. Constant, like the heave/pitch
+        # terms; at rest more of each mast is wetted, which this ignores.
+        z_flight = p["hull_offset"] - p["flying_height"]
+        added_mass_sway = added_inertia_yaw = 0.0
+        for s in self.struts:
+            wetted = float(np.clip(z_flight + s.z_foot, 0.0, s.length))
+            m_a = s.added_mass_sway(wetted)
+            added_mass_sway += m_a
+            added_inertia_yaw += m_a * s.x**2
+
         self.rigid_body = RigidBody(
             mass=p["mass"], I_b=np.diag([p["ixx"], p["iyy"], p["izz"]]),
             added_mass_heave=added_mass_heave, added_inertia_pitch=added_inertia_pitch,
+            added_mass_sway=added_mass_sway, added_inertia_yaw=added_inertia_yaw,
         )
 
-        polar = FoilTables.naca0009()
         # Main wing modeled as two independently-flapped halves, offset
         # laterally — this is what lets delta_roll produce a rolling moment
         # (asymmetric lift x lateral offset); the existing 6-DOF dynamics
@@ -160,6 +191,8 @@ class VehiclePhysics:
         tau += self.elev_foil.generalized_force(
             nu_rel, delta=cmds["delta_elev"],
             submergence_over_chord=self._submergence_over_chord(self.elev_foil, eta, water_surface_z))
+        for strut in self.struts:
+            tau += strut.generalized_force(nu_rel, eta, water_surface_z)
         tau += hull_buoyancy_force(eta, p["hull_offset"], p["waterplane_area"], p["max_draft"],
                                     water_surface_z=water_surface_z)
         tau += gravity_force(p["mass"], eta)
