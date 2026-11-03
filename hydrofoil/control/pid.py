@@ -99,7 +99,9 @@ class HydrofoilController:
     Outputs:
         delta_main  : symmetric main foil flap angle [deg]
         delta_elev  : elevator angle [deg]
-        delta_roll  : differential main foil angle (left - right) [deg]
+        delta_roll  : differential main flap angle [deg]; the right flap gets
+                      delta_main + delta_roll and the left delta_main - delta_roll
+                      (see vehicle.py), so positive delta_roll rolls the boat left
 
     Usage:
         ctrl = HydrofoilController(gains, dt=0.02)
@@ -151,7 +153,7 @@ class HydrofoilController:
         """
         heave_err = z_meas - z_ref      # +ve: too deep → need more lift to rise
         pitch_err = theta_meas - theta_ref  # +ve: nose up → need upward rear force → –M_y → nose down
-        roll_err  = phi_meas - phi_ref      # +ve: rolled right → need upward left force
+        roll_err  = phi_meas - phi_ref      # +ve: rolled right → need more right-side lift (+delta_roll)
 
         cmd_main = self.heave_pid.update(heave_err, z_meas)
         cmd_elev = self.pitch_pid.update(pitch_err, theta_meas)
