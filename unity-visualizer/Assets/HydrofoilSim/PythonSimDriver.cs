@@ -40,9 +40,18 @@ public class PythonSimDriver : MonoBehaviour
     public string pythonHost = "127.0.0.1";
     public int pilotPort = 5006;
 
-    [Header("Auto-Launch sim_realtime.py in WSL")]
-    [Tooltip("Launch the Python sim automatically when Play starts, in the named WSL distro — removes the manual 'open a WSL terminal and type the right command' step entirely.")]
+    public enum LaunchMode { Wsl, LocalPython }
+
+    [Header("Auto-Launch sim_realtime.py")]
+    [Tooltip("Launch the Python sim automatically when Play starts — removes the manual 'open a terminal and type the right command' step entirely.")]
     public bool autoLaunchSim = true;
+    [Tooltip("Wsl: run simCommand in the named WSL distro. LocalPython: run the sim natively " +
+             "on Windows with localPython, from the repo root.")]
+    public LaunchMode launchMode = LaunchMode.Wsl;
+    [Tooltip("LocalPython mode: the Python interpreter, absolute or relative to the repo root " +
+             "(the folder above unity-visualizer). Default is a venv made with " +
+             "'python -m venv .venv' and 'pip install -r requirements.txt'.")]
+    public string localPython = ".venv/Scripts/python.exe";
     public string wslDistro = "Ubuntu";
     [Tooltip("Command run inside `wsl -d <distro> -e bash -lc \"<this>\"`. --host 127.0.0.1 " +
              "is required here — without it, Python auto-detects the WSL gateway IP, which " +
@@ -209,16 +218,34 @@ public class PythonSimDriver : MonoBehaviour
                 RedirectStandardError = true,
                 CreateNoWindow = true,
             };
+            if (launchMode == LaunchMode.LocalPython)
+            {
+                string repoRoot = System.IO.Path.GetFullPath(System.IO.Path.Combine(Application.dataPath, "..", ".."));
+                psi.FileName = System.IO.Path.IsPathRooted(localPython)
+                    ? localPython
+                    : System.IO.Path.GetFullPath(System.IO.Path.Combine(repoRoot, localPython));
+                psi.Arguments = $"-u -m hydrofoil.sim_realtime --host 127.0.0.1 --port {port} " +
+                                $"--pilot-port {pilotPort} --duration 86400";
+                psi.WorkingDirectory = repoRoot;
+            }
             _simProcess = new System.Diagnostics.Process { StartInfo = psi, EnableRaisingEvents = true };
             _simProcess.OutputDataReceived += (s, e) => { if (e.Data != null) Debug.Log($"[sim_realtime] {e.Data}"); };
             _simProcess.ErrorDataReceived  += (s, e) => { if (e.Data != null) Debug.LogWarning($"[sim_realtime] {e.Data}"); };
             _simProcess.Start();
             _simProcess.BeginOutputReadLine();
             _simProcess.BeginErrorReadLine();
-            Debug.Log($"[PythonSimDriver] Auto-launched sim_realtime.py in WSL distro '{wslDistro}'. Its output appears above as [sim_realtime] lines.");
+            string where = launchMode == LaunchMode.LocalPython ? $"with {psi.FileName}" : $"in WSL distro '{wslDistro}'";
+            Debug.Log($"[PythonSimDriver] Auto-launched sim_realtime.py {where}. Its output appears above as [sim_realtime] lines.");
         }
         catch (Exception e)
         {
+            if (launchMode == LaunchMode.LocalPython)
+            {
+                Debug.LogError($"[PythonSimDriver] Failed to auto-launch the sim with '{localPython}': {e.Message}. "
+                    + "Make the venv (python -m venv .venv, then .venv/Scripts/pip install -r requirements.txt) "
+                    + "or run it yourself from the repo root: python -m hydrofoil.sim_realtime --host 127.0.0.1");
+                return;
+            }
             Debug.LogError($"[PythonSimDriver] Failed to auto-launch WSL sim: {e.Message}. "
                 + "Falling back to manual: run this yourself —\n"
                 + $"wsl -d {wslDistro} -e bash -lc \"{simCommand}\"");
@@ -281,7 +308,7 @@ public class PythonSimDriver : MonoBehaviour
             // the WSL instance (verified: the Linux-side python survived it) — the
             // WSL VM persists independently of any one wsl.exe invocation. Target
             // it explicitly by name inside WSL too, fire-and-forget.
-            if (autoLaunchSim)
+            if (autoLaunchSim && launchMode == LaunchMode.Wsl)
             {
                 try
                 {
