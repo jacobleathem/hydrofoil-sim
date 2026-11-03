@@ -97,6 +97,9 @@ public class CockpitHud : MonoBehaviour
             Row("Hull draft", $"{_python.Draft,5:F2} m");
             Row("Foilborne", _python.Foilborne ? "YES" : "no");
             Row("Thrust", $"{_python.Thrust,5:F0} N");
+            Row("Motors", string.IsNullOrEmpty(_python.FailsafeReason)
+                ? "live"
+                : $"CUT: {_python.FailsafeReason} ({_python.ThrustScale * 100f:F0}%)");
         }
         else
         {

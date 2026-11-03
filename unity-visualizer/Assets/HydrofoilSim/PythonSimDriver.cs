@@ -99,6 +99,8 @@ public class PythonSimDriver : MonoBehaviour
     [SerializeField] private float _draft;
     [SerializeField] private bool  _foilborne;
     [SerializeField] private float _waveElev;
+    [SerializeField] private float _thrustScale = 1f;
+    [SerializeField] private string _failsafe = "";
     [SerializeField] private int   _packetsReceived;
 
     // Read-only access for the cockpit HUD.
@@ -114,6 +116,10 @@ public class PythonSimDriver : MonoBehaviour
     public float Draft => _draft;
     public bool  Foilborne => _foilborne;
     public float WaveElev => _waveElev;
+    /// <summary>Python's failsafe thrust scale: 1 = motors live, 0 = cut.</summary>
+    public float ThrustScale => _thrustScale;
+    /// <summary>Why Python cut the motors (disarmed, deadman released, pilot link lost), "" while live.</summary>
+    public string FailsafeReason => _failsafe;
     public int   PacketsReceived => _packetsReceived;
     /// <summary>Real seconds since the last state packet arrived (infinity if none yet).</summary>
     public float SecondsSinceLastPacket => _packetsReceived == 0 ? float.PositiveInfinity : Time.realtimeSinceStartup - _lastPacketRealtime;
@@ -140,6 +146,8 @@ public class PythonSimDriver : MonoBehaviour
         public float draft;             // hull draft below local water surface [m]
         public bool  foilborne;         // draft <= 0, hull clear of the water
         public float wave_elev;         // wave surface elevation at the vehicle's position [m]
+        public float thrust_scale = 1f; // Python failsafe: 1 = motors live, 0 = cut (1 if the sim doesn't send it)
+        public string failsafe = "";    // why Python cut the motors, "" while live
     }
 
     // Climb/dive + throttle + bank pilot stick (from PilotInput), sent back to
@@ -224,8 +232,10 @@ public class PythonSimDriver : MonoBehaviour
                 psi.FileName = System.IO.Path.IsPathRooted(localPython)
                     ? localPython
                     : System.IO.Path.GetFullPath(System.IO.Path.Combine(repoRoot, localPython));
+                // --require-pilot: no thrust until this driver's first pilot packet,
+                // so the boat doesn't set off before the cockpit is connected.
                 psi.Arguments = $"-u -m hydrofoil.sim_realtime --host 127.0.0.1 --port {port} " +
-                                $"--pilot-port {pilotPort} --duration 86400";
+                                $"--pilot-port {pilotPort} --duration 86400 --require-pilot";
                 psi.WorkingDirectory = repoRoot;
             }
             _simProcess = new System.Diagnostics.Process { StartInfo = psi, EnableRaisingEvents = true };
@@ -406,6 +416,8 @@ public class PythonSimDriver : MonoBehaviour
         _draft     = p.draft;
         _foilborne = p.foilborne;
         _waveElev  = p.wave_elev;
+        _thrustScale = p.thrust_scale;
+        _failsafe  = p.failsafe ?? "";
     }
 
     // ── Gizmos ────────────────────────────────────────────────────────────
