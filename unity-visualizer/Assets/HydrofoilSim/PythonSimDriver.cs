@@ -296,12 +296,19 @@ public class PythonSimDriver : MonoBehaviour
         Vector3 unityPos = new Vector3(p.y, -p.z + waterSurfaceY, p.x);
         shipTransform.position = unityPos;
 
-        // Euler angles: pitch θ (+nose-up NED) → Unity -X; yaw ψ → +Y; roll φ → +Z.
-        // modelYawOffsetDeg corrects for the hull mesh's authored forward axis.
+        // Body attitude in the physics frame (forward +Z, right +X, up +Y).
+        // Quaternion.Euler applies roll, then pitch, then yaw, which matches
+        // NED's ZYX convention. Pitch θ (+nose-up) → -X; yaw ψ (+turn right) → +Y;
+        // roll φ (+right side down) → -Z, since a +Z turn in Unity lifts the right side.
+        // modelYawOffsetDeg corrects the hull mesh's authored forward axis, so it is
+        // applied first, in the model's own frame. Folding it into the yaw angle (as
+        // before) rotated pitch and roll with it: Python's pitch showed as a roll of
+        // the hull and its roll as pitch.
         shipTransform.rotation = Quaternion.Euler(
-            -p.theta * Mathf.Rad2Deg,
-             p.psi   * Mathf.Rad2Deg + modelYawOffsetDeg,
-             p.phi   * Mathf.Rad2Deg);
+                -p.theta * Mathf.Rad2Deg,
+                 p.psi   * Mathf.Rad2Deg,
+                -p.phi   * Mathf.Rad2Deg)
+            * Quaternion.Euler(0f, modelYawOffsetDeg, 0f);
 
         // Foil flap rotations. d_main is the common (heave) deflection, d_roll is the
         // differential added on top so the two flaps counter-rotate for roll/turn authority.
