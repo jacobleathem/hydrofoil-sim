@@ -49,7 +49,7 @@ class PID:
         self._integral = 0.0
         self._prev_measurement = None
 
-    def update(self, error: float, measurement: float) -> float:
+    def update(self, error: float, measurement: float, integrate: bool = True) -> float:
         """
         Compute control output for one timestep.
 
@@ -59,6 +59,10 @@ class PID:
                       caller's choice — this class doesn't assume one)
         measurement : the raw process value error was derived from, used
                       ONLY for the derivative term (see below)
+        integrate   : False holds the integral where it is this step (it
+                      still contributes to the output). For conditional
+                      integration, e.g. while the controlled axis has no
+                      authority.
 
         Derivative-on-measurement, not derivative-on-error: a sudden
         setpoint change (e.g. a pilot stick input) makes `error` jump
@@ -79,14 +83,15 @@ class PID:
             derivative = 0.0
         else:
             derivative = (measurement - self._prev_measurement) / self.dt
-        self._integral += error * self.dt
+        step = error * self.dt if integrate else 0.0
+        self._integral += step
 
         output = self.Kp * error + self.Ki * self._integral + self.Kd * derivative
 
         # clamp and anti-windup: stop integrating when saturated
         clamped = np.clip(output, self.output_min, self.output_max)
         if output != clamped:
-            self._integral -= error * self.dt   # undo last integration step
+            self._integral -= step   # undo last integration step
 
         self._prev_measurement = measurement
         return float(clamped)
@@ -138,6 +143,7 @@ class HydrofoilController:
         z_ref: float,     z_meas: float,
         phi_ref: float,   phi_meas: float,
         theta_ref: float, theta_meas: float,
+        foilborne: bool = True,
     ) -> dict:
         """
         Compute foil deflection commands.
@@ -145,6 +151,12 @@ class HydrofoilController:
         Sign convention: positive delta → increased AoA → increased lift.
         NED frame: z positive downward, so altitude error = z_meas - z_ref
         (deeper = more positive = we want to rise = positive lift needed).
+
+        foilborne: False while the hull is still in the water. The integrals
+        are held then: the hull, not the foils, is carrying the boat, so
+        error built up at rest or low speed (e.g. the boat sitting below its
+        flying height) is not something the flaps can trim out, and would
+        otherwise wind the main flap to its limit and kick at takeoff.
 
         Returns
         -------
@@ -155,9 +167,9 @@ class HydrofoilController:
         pitch_err = theta_meas - theta_ref  # +ve: nose up → need upward rear force → –M_y → nose down
         roll_err  = phi_meas - phi_ref      # +ve: rolled right → need more right-side lift (+delta_roll)
 
-        cmd_main = self.heave_pid.update(heave_err, z_meas)
-        cmd_elev = self.pitch_pid.update(pitch_err, theta_meas)
-        cmd_roll = self.roll_pid.update(roll_err, phi_meas)
+        cmd_main = self.heave_pid.update(heave_err, z_meas, integrate=foilborne)
+        cmd_elev = self.pitch_pid.update(pitch_err, theta_meas, integrate=foilborne)
+        cmd_roll = self.roll_pid.update(roll_err, phi_meas, integrate=foilborne)
 
         return {
             'delta_main': self.main_actuator.update(cmd_main),

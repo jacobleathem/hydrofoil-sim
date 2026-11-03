@@ -258,12 +258,15 @@ class VehiclePhysics:
         eta, nu = state[:6], state[6:]
 
         z_ref = p["hull_offset"] - p["flying_height"]
+        wave_elev, water_surface_z, wave_vel_body = self._wave_state(eta, t, wave)
+        foilborne = hull_draft(eta, p["hull_offset"], p["max_draft"], water_surface_z) <= 0.0
         # phi_ref/theta_ref are stored in degrees (UI convention); eta's
         # angles are radians (Fossen convention) — convert before compare.
         cmds = self.controller.update(
             z_ref,                       eta[2],
             np.radians(p["phi_ref"]),    eta[3],
             np.radians(p["theta_ref"]),  eta[4],
+            foilborne=foilborne,
         )
         thrust = self.surge.update(p["target_speed"], nu[0])
         # Failsafe ramp-down (see control_uplink.ThrottleFailsafe): 1 = live,
@@ -276,7 +279,6 @@ class VehiclePhysics:
             thrust = max(0.0, thrust) * thrust_scale
         if thrust_scale <= 0.0:
             self.surge.reset()
-        wave_elev, water_surface_z, wave_vel_body = self._wave_state(eta, t, wave)
 
         def rhs(s):
             return self.physics_rhs(s, cmds, thrust, water_surface_z, wave_vel_body)
