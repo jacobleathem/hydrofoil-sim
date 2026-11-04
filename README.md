@@ -7,8 +7,8 @@ driven over UDP. Built for UBC Okanagan Marine Robotics Hydrofoil Club.
 ## Missing file — read this first
 
 `unity-visualizer/Assets/Foil/Mockup4_JacobRig_Merged.blend` is **not** in
-this repo — it's 709MB, over GitHub's 100MB file limit. Jacob is sending it
-to you separately. Once you have it, drop it in at exactly that path
+this repo — it's 709MB, over GitHub's 100MB file limit. the file is in hydro foil drive in mech then cad files
+you need to drag both files in unity just the .blends tho. Once you have it, drop it in at exactly that path
 (`unity-visualizer/Assets/Foil/`) before opening the Unity project, or the
 boat hull won't render (everything else — scripts, scene, materials, physics
 — works fine without it).
