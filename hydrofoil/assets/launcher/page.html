@@ -227,7 +227,7 @@ details summary { cursor:pointer; color:var(--mist); padding:6px 0; }
 
 <form class="session" method="post" action="/start" id="session">
   __FIELDS__
-  <div class="go"><button>Launch viewer</button><button type="button" class="quiet" id="focus" disabled>Show 3D view</button><button class="quiet" formaction="/stop">Close viewer</button></div>
+  <div class="go"><button>Launch viewer</button><button type="button" id="loadCad" title="Reset the CAD preset to the exact values measured from our SolidWorks assembly (wings, struts, pontoons, propellers) and launch it">Load our CAD boat</button><button type="button" class="quiet" id="focus" disabled>Show 3D view</button><button class="quiet" formaction="/stop">Close viewer</button></div>
 </form>
 
 <nav class="tabs" role="tablist">
@@ -393,8 +393,8 @@ details summary { cursor:pointer; color:var(--mist); padding:6px 0; }
       <div class="sumgrid" id="boatSummary"></div>
       <div class="trimchart"><svg id="trimchart" viewBox="0 0 800 220" role="img" aria-label="Flap needed to trim against speed"></svg></div>
       <div style="overflow-x:auto;max-width:100%"><table class="cmp" id="cmp"></table></div>
-      <p class="note">Physics note: wings use rectangular planform NACA 0009 section polars (span, chord, aspect ratio, flap fraction, and incidence scale the model). Adding weights computes full 3D Center of Gravity (forward x, starboard y, vertical z) and 3D rotational inertias via the parallel-axis theorem; moving CG vertically updates roll/pitch inertias and is reported in the balance readout.</p>
-      <div class="row" style="display:flex;gap:8px;flex-wrap:wrap"><button id="saveBoat">Save and relaunch 3D view</button><button class="quiet" id="resetBoat">Reset to preset defaults</button><span class="note" id="boatMsg"></span></div>
+      <p class="note">Physics note: wings use rectangular planform NACA 0009 section polars (span, chord, aspect ratio, flap fraction, and incidence scale the model). The CAD boat's flaps sit next to the centreline, and their extra lift is applied there, so roll control is modelled with the real (short) lever arm. Adding weights computes full 3D Center of Gravity (forward x, starboard y, vertical z) and 3D rotational inertias via the parallel-axis theorem; moving CG vertically updates roll/pitch inertias and is reported in the balance readout.</p>
+      <div class="row" style="display:flex;gap:8px;flex-wrap:wrap"><button id="saveBoat">Save and relaunch 3D view</button><button class="quiet" id="resetBoat">Reset to preset defaults</button><button class="quiet" id="loadCadBoat" title="Switch to the CAD preset with every value exactly as measured from our SolidWorks assembly">Load our CAD values</button><span class="note" id="boatMsg"></span></div>
     </div>
   </div>
 </div></div>
@@ -430,7 +430,8 @@ details summary { cursor:pointer; color:var(--mist); padding:6px 0; }
 <script>
 const API = "http://127.0.0.1:__APIPORT__";
 const LEVERS = {
-  helm: [["height_ref", "Ride height target", "m"], ["speed_ref", "Speed target", "m/s"], ["bank_ref", "Bank", "°"]],
+  helm: [["height_ref", "Ride height target", "m"], ["speed_ref", "Speed target", "m/s"], ["bank_ref", "Bank", "°"],
+         ["main_incidence", "Main wing mounting angle", "°"]],
   sea:  [["wave_amp", "Wave amplitude", "m"], ["wave_len", "Wavelength", "m"], ["wave_dir", "Wave travel direction", "°"]],
   tune: [["gear_ratio", "Gear ratio", ":1"], ["v_bus", "Bus voltage", "V"], ["kp_heave", "Heave kp", ""], ["ki_heave", "Heave ki", ""],
          ["kd_heave", "Heave kd", ""], ["kp_pitch", "Pitch kp", ""], ["kd_pitch", "Pitch kd", ""], ["kp_roll", "Roll kp", ""], ["kd_roll", "Roll kd", ""]],
@@ -822,7 +823,7 @@ const EDIT = [
   ["Front Main Wing (Split Left & Right Flaps)", "Provides almost all lift and tilts left/right with split flaps to bank the boat into turns.",
    [["main_chord", "Chord (width front-to-back)", "m", 0.01, "Wider blade = more lift at lower speed, higher flap torque."],
     ["main_span", "Half-span (each side wing)", "m", 0.05, "Longer wings glide more smoothly, but tips reach closer to the water surface in steep turns."],
-    ["main_incidence_deg", "Fixed mounting angle", "°", 0.25, "Set so flaps stay near 0° at cruise for maximum wave headroom."],
+    ["main_incidence_deg", "Fixed mounting angle (0–5°)", "°", 0.25, "How far the whole front wing is tilted nose-up on its mounts. Our CAD wing is at 0°; more angle = more lift at low speed and less flap needed."],
     ["main_flap_frac", "Movable flap fraction", "", 0.05, "Share of wing chord that hinges (0.25 = 25% flap)."]]],
   ["Back Wing / Elevator (One Piece — Pitch Only)", "Balances pitch (nose up/down). Has no split roll/yaw flaps — keep arm long enough for gentle, stable pitch.",
    [["elev_chord", "Chord", "m", 0.01, "Depth of rear stabilizer blade."],
@@ -835,7 +836,7 @@ const EDIT = [
     ["target_speed", "Cruise speed", "spd", 0.25, "Steady speed the boat holds on autopilot while flying."],
     ["max_thrust", "Max motor thrust limit", "N", 10, "Must comfortably exceed displacement hump drag or the boat stays on the water."]]],
 ];
-const selPreset = () => (document.querySelector("select[name=preset]") || {}).value || "manned";
+const selPreset = () => (document.querySelector("select[name=preset]") || {}).value || "cad";
 const presetSel = document.querySelector("select[name=preset]");
 if (presetSel) presetSel.addEventListener("change", () => { if (currentTab === "boat") loadBoat(); if (currentTab === "tune") pollTune(true); });
 
@@ -859,10 +860,12 @@ function buildFields() {
       const d = document.createElement("label"); d.className = "fld" + (k in edits ? " changed" : "");
       d.innerHTML = `<span>${label}${dispUnit ? ` (${dispUnit})` : ""}</span>`;
       const inp = Object.assign(document.createElement("input"), {type:"number", step:dispStep, value:+(+dispVal).toFixed(3)});
+      if (k === "main_incidence_deg") { inp.min = 0; inp.max = 5; }
       inp.oninput = () => {
         const raw = parseFloat(inp.value);
         if (!isFinite(raw)) return;
-        const x = u === "spd" ? toSI(raw) : raw;
+        let x = u === "spd" ? toSI(raw) : raw;
+        if (k === "main_incidence_deg") x = Math.min(5, Math.max(0, x));
         if (Math.abs(x - boat.base[k]) < 1e-6) delete edits[k]; else edits[k] = x;
         d.classList.toggle("changed", k in edits); schedulePreview();
       };
@@ -889,10 +892,10 @@ function buildFields() {
   drawTable();
   const qadd = document.createElement("div"); qadd.className = "quickadd";
   const addItem = (name, mass, x, y, z) => { payloads.push({name, mass, x, y, z}); drawTable(); if (lastPreview) drawPlan(lastPreview); schedulePreview(); };
-  [["+ Rider", boat.preset === "manned" ? 75 : 5, -0.43, 0, 0.33],
-   ["+ Battery", boat.preset === "manned" ? 25 : 2.5, 0.35, 0, 0.10],
-   ["+ Motor/Gear", boat.preset === "manned" ? 12 : 1.5, -0.80, 0, -0.20],
-   ["+ Custom", boat.preset === "manned" ? 10 : 1, 0, 0, 0]
+  [["+ Rider", boat.preset !== "model" ? 75 : 5, -0.43, 0, 0.33],
+   ["+ Battery", boat.preset !== "model" ? 25 : 2.5, 0.35, 0, 0.10],
+   ["+ Motor/Gear", boat.preset !== "model" ? 12 : 1.5, -0.80, 0, -0.20],
+   ["+ Custom", boat.preset !== "model" ? 10 : 1, 0, 0, 0]
   ].forEach(([lbl, m, x, y, z]) => {
     const btn = Object.assign(document.createElement("button"), {className:"quiet small", type:"button", textContent:lbl});
     btn.onclick = () => addItem(lbl.replace("+ ", ""), m, x, y, z);
@@ -929,11 +932,16 @@ function drawPlan(r) {
   const maxPx = payloads.reduce((a, q) => Math.max(a, Math.abs(+q.x || 0) + 0.3), 0);
   const maxPy = payloads.reduce((a, q) => Math.max(a, Math.abs(+q.y || 0) + 0.3), 0);
   const L = Math.max(g0.hull_length, 2.6 - g1.elev_pos_x, g1.hull_length, 2 * maxPx) + 0.6;
-  const span = Math.max(2 * (g1.main_lateral_offset + g1.main_span / 2), g0.hull_beam, 2 * maxPy) + 0.4;
+  const span = Math.max(2 * (g1.main_lateral_offset + g1.main_span / 2), g0.hull_beam + (+g0.hull_twin_spacing || 0), 2 * maxPy) + 0.4;
   const sc = Math.min((W - 80) / L, (H - 56) / span), cx = W / 2 + 0.12 * sc * L / 2, cy = H / 2;
   const X = x => cx + x * sc, Y = y => cy + y * sc;
   planMap = {svg, cx, cy, sc};
   const hull = (g, st) => { const x0 = g.hull_x - g.hull_length / 2, x1 = g.hull_x + g.hull_length / 2, b = g.hull_beam / 2;
+    const tw = +(g.hull_twin_spacing || 0);
+    if (tw > 0) {   // catamaran: two pontoons
+      for (const yc of [-tw / 2, tw / 2]) node("rect", {x:X(x0), y:Y(yc - b), width:(x1 - x0) * sc, height:2 * b * sc, rx:b * sc, ...st}, svg);
+      return;
+    }
     node("path", {d:`M${X(x0)} ${Y(-b)} L${X(x1 - 0.25 * g.hull_length)} ${Y(-b)} L${X(x1)} ${Y(0)} L${X(x1 - 0.25 * g.hull_length)} ${Y(b)} L${X(x0)} ${Y(b)} Z`, ...st}, svg); };
   const foils = (g, st) => {
     for (const sgn of [-1, 1]) { const yc = sgn * g.main_lateral_offset;
@@ -993,15 +1001,16 @@ function drawSummary(r) {
 }
 function drawTrim(r) {
   const svg = $("trimchart"); svg.innerHTML = "";
-  const W = 800, H = 220, L = 46, R = 36, T = 12, B = 30, v0 = 3, v1 = 12;
+  const okV = [...r.base.curve, ...r.edited.curve].filter(c => c.flap != null && Math.abs(c.flap) <= 25).map(c => c.speed);
+  const W = 800, H = 220, L = 46, R = 36, T = 12, B = 30, v0 = 3, v1 = Math.max(12, Math.min(16, Math.ceil(Math.max(...okV, 12))));
   const X = v => L + (v - v0) / (v1 - v0) * (W - L - R), Y = f => T + (25 - f) / 50 * (H - T - B);
   node("rect", {x:L, y:Y(15), width:W - L - R, height:Y(-15) - Y(15), fill:css("--deep")}, svg);
   for (const f of [-20, -10, 0, 10, 20]) { node("line", {x1:L, x2:W - R, y1:Y(f), y2:Y(f), stroke:css("--rule")}, svg);
     const t = node("text", {x:4, y:Y(f) + 4, fill:css("--mist"), "font-size":12}, svg); t.textContent = `${f}°`; }
-  for (let v = 4; v <= 12; v += 2) { const t = node("text", {x:X(v), y:H - 8, "text-anchor":v === 12 ? "end" : "middle", fill:css("--mist"), "font-size":12}, svg);
+  for (let v = 4; v <= v1; v += 2) { const t = node("text", {x:X(v), y:H - 8, "text-anchor":v + 2 > v1 ? "end" : "middle", fill:css("--mist"), "font-size":12}, svg);
     t.textContent = `${spd(v).toFixed(unit === "m/s" ? 0 : 1)} ${unit}`; }
   const line = (curve, col, dash) => { let d = "", pen = false;
-    for (const c of curve) { if (c.flap == null || Math.abs(c.flap) > 25) { pen = false; continue; } d += `${pen ? "L" : "M"}${X(c.speed)} ${Y(c.flap)}`; pen = true; }
+    for (const c of curve) { if (c.flap == null || Math.abs(c.flap) > 25 || c.speed > v1) { pen = false; continue; } d += `${pen ? "L" : "M"}${X(c.speed)} ${Y(c.flap)}`; pen = true; }
     node("path", {d, fill:"none", stroke:col, "stroke-width":2.5, "stroke-dasharray":dash || ""}, svg); };
   line(r.base.curve, css("--aqua"), "6 5"); line(r.edited.curve, css("--signal"));
   const vx = Math.max(L, Math.min(W - R, X(r.edited.cruise_speed)));
@@ -1043,6 +1052,17 @@ $("saveBoat").onclick = async () => {
   await fetch("/api/relaunch", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({preset:boat.preset})});
   $("boatMsg").textContent = "Saved to local overrides. Relaunching the 3D viewer (LQR gains recalculate for a few seconds).";
 };
+async function loadCadBoat(msgId) {
+  if (msgId) $(msgId).textContent = "Loading the CAD boat and relaunching the 3D view…";
+  const r = await (await fetch("/api/load_cad", {method:"POST", headers:{"Content-Type":"application/json"}, body:"{}"})).json();
+  if (r.error) { if (msgId) $(msgId).textContent = r.error; return; }
+  const sel = document.querySelector("select[name=preset]"); if (sel) sel.value = "cad";
+  built = false;
+  if (currentTab === "boat") loadBoat();
+  if (msgId) $(msgId).textContent = "CAD boat loaded (all saved edits for it cleared). The 3D view is relaunching.";
+}
+$("loadCad").onclick = () => loadCadBoat(null);
+$("loadCadBoat").onclick = () => loadCadBoat("boatMsg");
 $("resetBoat").onclick = async () => {
   await fetch("/api/design/save", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({preset:boat.preset, reset:true})});
   loadBoat();

@@ -97,8 +97,9 @@ def mass_properties(p: dict, payloads: list | None, empty_mass: float | None = N
 
 def _wetted_proxy(p: dict) -> float:
     L, B = p["hull_length"], p["hull_beam"]
-    d = min(p["mass"] / max(RHO_WATER * L * B, 1e-6), p["max_draft"])
-    return L * B + 2.0 * d * (L + B)
+    n = 2 if float(p.get("hull_twin_spacing", 0.0) or 0.0) > 0.0 else 1
+    d = min(p["mass"] / max(RHO_WATER * n * L * B, 1e-6), p["max_draft"])
+    return n * (L * B + 2.0 * d * (L + B))
 
 
 def _foil_eff(p: dict) -> float:
@@ -297,7 +298,7 @@ _CONTROL_KEYS = ("lqr_", "est_", "trim_ff", "kp_", "ki_", "kd_", "controller", "
 def trim_curve(p: dict, speeds=None) -> list[dict]:
     """Level trim at each speed (cached on the physical parameters only: controller settings do not change trim)."""
     warnings.simplefilter("ignore")
-    speeds = speeds if speeds is not None else np.round(np.arange(3.0, 12.01, 0.5), 2)
+    speeds = speeds if speeds is not None else np.round(np.arange(3.0, 16.01, 0.5), 2)   # 16: the CAD boat at 0 deg
     key = (repr(sorted((k, repr(v)) for k, v in p.items() if not k.startswith(_CONTROL_KEYS))), tuple(speeds))
     if key in _CURVES:
         return _CURVES[key]

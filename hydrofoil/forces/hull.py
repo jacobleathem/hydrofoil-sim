@@ -125,26 +125,31 @@ class HullHydrostatics:
     of p_i x f_i. Heave, roll and pitch stiffness, partial emergence during takeoff, and
     wave slope across the hull all follow from this one integral.
 
-    The footprint is a rectangle (length x beam, centred at x_center), a placeholder.
+    The footprint is a rectangle (length x beam, centred at x_center), a placeholder. With twin_spacing > 0 it is
+    two such rectangles (catamaran pontoons, each `beam` wide) centred at y = +-twin_spacing / 2.
     """
 
     def __init__(self, length: float, beam: float, x_center: float, hull_offset: float,
                  max_draft: float, nx: int = 11, ny: int = 7,
-                 rho: float = RHO_WATER, g: float = G):
+                 rho: float = RHO_WATER, g: float = G, twin_spacing: float = 0.0):
         length = max(float(length), 1e-3)
         beam = max(float(beam), 1e-3)
         max_draft = max(float(max_draft), 0.0)
         nx = max(int(nx), 1)
         ny = max(int(ny), 1)
+        n_hulls = 2 if float(twin_spacing) > 0.0 else 1
         xs = x_center + ((np.arange(nx) + 0.5) / nx - 0.5) * length
         ys = ((np.arange(ny) + 0.5) / ny - 0.5) * beam
+        if n_hulls == 2:
+            ys = np.concatenate([ys - 0.5 * float(twin_spacing), ys + 0.5 * float(twin_spacing)])
         X, Y = np.meshgrid(xs, ys, indexing="ij")
         self.xy = np.stack([X.ravel(), Y.ravel()], axis=1)                       # (N, 2)
         self.bottom = np.column_stack([self.xy, np.full(len(self.xy), -hull_offset)])   # (N, 3) body coords
         self.xy0 = self.xy.copy()
         self.bottom0 = self.bottom.copy()
+        self.n_hulls = n_hulls
         self.dA = length * beam / (nx * ny)
-        self.waterplane_area = length * beam
+        self.waterplane_area = n_hulls * length * beam
         self.hull_offset = float(hull_offset)
         self.hull_offset0 = float(hull_offset)
         self.max_draft = max_draft
@@ -203,7 +208,7 @@ class HullHydrostatics:
         if hull_length and hull_length > 0.0 and hump_amp > 0.0:
             fr = abs(float(nu[0])) / np.sqrt(self.g * hull_length)
             hump = 1.0 + hump_amp * np.exp(-((fr - 0.48) / 0.22) ** 2)
-        sway_coeff = (0.5 * self.rho * hull_length * self.max_draft
+        sway_coeff = (0.5 * self.rho * hull_length * self.max_draft * getattr(self, "n_hulls", 1)
                       if (hull_length and hull_length > 0.0 and self.max_draft > 0.0)
                       else 4.0 * drag_coeff)
         tau = np.zeros(6)

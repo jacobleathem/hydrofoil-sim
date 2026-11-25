@@ -38,7 +38,7 @@ _last_tune_data: dict = {"status": "idle"}
 _auto_saved_sig: tuple | None = None
 
 FIELDS = {   # name: (choices or None for free numeric, default)
-    "preset": (("model", "manned"), "manned"),
+    "preset": (("cad", "manned", "model"), "cad"),
     "supervisor": (("off", "on"), "on"),
     "controller": (("auto", "lqr", "pid"), "auto"),
     "allocator": (("jacobian", "legacy"), "jacobian"),
@@ -150,21 +150,22 @@ EDIT_KEYS = ["main_chord", "main_span", "main_incidence_deg", "main_flap_frac", 
 
 def design_info(preset: str) -> dict:
     """Preset values for the editor fields, and what is saved for this preset."""
-    from hydrofoil.params import DEFAULT_PARAMS, MANNED_PARAMS
-    p = MANNED_PARAMS if preset == "manned" else DEFAULT_PARAMS
+    from hydrofoil.params import preset_params
+    p = preset_params(preset)
     payloads = p.get("default_payloads", [])
     base = {k: p[k] for k in EDIT_KEYS}
     base["strut_length"] = p["hull_offset"] + p["main_pos_z"]
     base["empty_mass"] = float(p["mass"] - sum(float(q["mass"]) for q in payloads))
     geom = {k: p[k] for k in ("hull_length", "hull_beam", "hull_x", "main_lateral_offset")}
+    geom["hull_twin_spacing"] = float(p.get("hull_twin_spacing", 0.0) or 0.0)
     return {"preset": preset, "base": base, "payloads": payloads, "geom": geom,
             "saved": load_overrides().get(preset, {})}
 
 
 def design_preview(preset: str, overrides: dict) -> dict:
-    from hydrofoil.params import DEFAULT_PARAMS, MANNED_PARAMS
+    from hydrofoil.params import preset_params
     from hydrofoil.design import apply_design, derived, design_summary
-    p = dict(MANNED_PARAMS if preset == "manned" else DEFAULT_PARAMS)
+    p = preset_params(preset)
     design_only = {k: v for k, v in overrides.items() if k not in ("lqr_weights",) and not k.startswith(("kp_", "ki_", "kd_"))}
     e = apply_design(p, design_only)
     base_d = derived(p, include_summary=False)
@@ -173,7 +174,8 @@ def design_preview(preset: str, overrides: dict) -> dict:
     edit_d["summary"] = design_summary(base_d, edit_d, e)
     return {"base": base_d, "edited": edit_d,
             "edited_geom": {k: e[k] for k in ("main_chord", "main_span", "main_lateral_offset", "elev_chord", "elev_span",
-                                               "elev_pos_x", "hull_length", "hull_beam", "hull_x")}}
+                                               "elev_pos_x", "hull_length", "hull_beam", "hull_x")}
+                           | {"hull_twin_spacing": float(e.get("hull_twin_spacing", 0.0) or 0.0)}}
 
 
 def _persist_tuned(preset: str, vals: dict) -> None:
@@ -186,10 +188,10 @@ def _persist_tuned(preset: str, vals: dict) -> None:
 
 def stored_controller_values(preset: str) -> dict:
     """Return both preset defaults and persisted backend overrides for PID gains and LQR weights."""
-    from hydrofoil.params import DEFAULT_PARAMS, MANNED_PARAMS
+    from hydrofoil.params import preset_params
     from hydrofoil.control.lqr import DEFAULT_WEIGHTS
     from hydrofoil.tuning.autotune import PID_KEYS
-    p = MANNED_PARAMS if preset == "manned" else DEFAULT_PARAMS
+    p = preset_params(preset)
     ov = load_overrides().get(preset, {})
     defaults_pid = {k: float(p[k]) for k in PID_KEYS}
     stored_pid = {k: float(ov.get(k, p[k])) for k in PID_KEYS}
@@ -269,7 +271,10 @@ def page() -> str:
     def select(name):
         choices, d = FIELDS[name]
         cur = last_form.get(name, d)
-        opts = "".join(f'<option{" selected" if c == cur else ""}>{c}</option>' for c in choices)
+        from hydrofoil.params import PRESET_LABELS
+        labels = PRESET_LABELS if name == "preset" else {}
+        opts = "".join(f'<option value="{c}"{" selected" if c == cur else ""}>{html.escape(labels.get(c, c))}</option>'
+                       for c in choices)
         return f'<label>{LABELS[name]}<select name="{name}">{opts}</select></label>'
 
     def number(name):
@@ -345,6 +350,19 @@ class Handler(BaseHTTPRequestHandler):
                         allov[preset] = keep
                     save_overrides(allov)
                     return self._json({"ok": True})
+                if self.path == "/api/load_cad":
+                    # "Load our CAD boat": drop every saved edit and tuned gain for the CAD preset so the boat is
+                    # exactly CAD_PARAMS (hydrofoil/params.py), then (re)launch the 3D view with it.
+                    allov = load_overrides()
+                    allov.pop("cad", None)
+                    save_overrides(allov)
+                    f = STATE_DIR / "overrides_cad.json"
+                    if f.exists():
+                        f.unlink()
+                    form = {k: [v] for k, v in last_form.items()}
+                    form["preset"] = ["cad"]
+                    start(form)
+                    return self._json({"ok": True, "preset": "cad"})
                 if self.path == "/api/relaunch":
                     form = {k: [v] for k, v in last_form.items()} or {"preset": [preset]}
                     form["preset"] = [preset]

@@ -194,13 +194,14 @@ def report(params: dict, title: str = "") -> list[dict]:
 
 
 def main():
-    from hydrofoil.params import DEFAULT_PARAMS, MANNED_PARAMS
+    from hydrofoil.params import PRESETS
     ap = argparse.ArgumentParser(description="Check parameter co-dependencies")
-    ap.add_argument("--preset", choices=("model", "manned", "both"), default="both")
+    ap.add_argument("--preset", choices=(*PRESETS, "both", "all"), default="both",
+                    help="both = model + manned (the tuned presets); all = also the CAD boat")
     a = ap.parse_args()
     fails = 0
-    for name, p in (("model", DEFAULT_PARAMS), ("manned", MANNED_PARAMS)):
-        if a.preset in (name, "both"):
+    for name, p in PRESETS.items():
+        if a.preset == name or a.preset == "all" or (a.preset == "both" and name in ("model", "manned")):
             fails += sum(r["status"] == "FAIL" for r in report(p, name))
     raise SystemExit(1 if fails else 0)
 

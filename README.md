@@ -21,6 +21,7 @@ hydrofoil, with a native MuJoCo app (3D view, sliders, live plots, actuator load
   - `design.py`, `consistency.py`, `monitor.py`, and `tuning/` provide the boat editor,
     parameter co-dependency checker, flight observer, and phase-aware controller autotuner
     (`--target auto` optimizes PID for takeoff/landing and LQR for foilborne cruise and 3D turns).
+- **CAD boat:** `--preset cad` is our SolidWorks design (measured geometry, assumptions listed) — [docs/26-cad-boat-preset.md](docs/26-cad-boat-preset.md).
 - `docs/` — engineering documentation, audits, and system architecture (start at [docs/00-master-system-architecture.md](docs/00-master-system-architecture.md) and [docs/README.md](docs/README.md)).
 - `tests/` — pytest suite covering physics, actuation, compliance, linearisation, LQR/estimation, supervisor, and tools.
 - `tools/` — verification and sizing scripts (`audit.py`, `actuator_budget.py`, `flap_design.py`, `phase_trials.py`, `wave_study.py`).
@@ -43,9 +44,10 @@ python -m hydrofoil.consistency
 # Web launcher, boat editor, and autotuner dashboard (http://127.0.0.1:8765)
 python -m hydrofoil.sim_server
 
+# Our boat from the CAD (default in the dashboard; see docs/26): python -m hydrofoil.viewer --preset cad
 # Or launch the 3-D MuJoCo viewer directly. Click the window, then:
 #   Up/Down = height, Left/Right = bank, Space = level, [ ] (-/+) = speed, F = foil/land, R = reset, C = Auto/LQR/PID, U = m/s / km/h / mph, D = dashboard
-python -m hydrofoil.viewer [--preset model|manned] [--supervisor] [--controller auto|lqr|pid] [--sensors ideal|noisy] [--waves] [--wave-type regular|irregular] [--wave-dir DEG] [--speed 1.0]
+python -m hydrofoil.viewer [--preset cad|model|manned] [--supervisor] [--controller auto|lqr|pid] [--sensors ideal|noisy] [--waves] [--wave-type regular|irregular] [--wave-dir DEG] [--speed 1.0]
 
 # Actuator budget, flap/drive design study, per-phase mission sweep, and directional wave study
 python tools/actuator_budget.py

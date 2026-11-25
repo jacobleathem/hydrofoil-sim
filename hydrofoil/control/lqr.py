@@ -280,18 +280,32 @@ class LQRController:
         key = _plant_cache_key(vp, self.speeds, dt, self.delay_steps)
         cached = _PLANT_LIN_CACHE.get(key)
         if cached is None:
-            cached = []
+            cached, ok_speeds = [], []
             for s in self.speeds:
-                x0, u0 = trim(vp, float(s))
+                try:
+                    x0, u0 = trim(vp, float(s))
+                except RuntimeError:
+                    continue                    # no level trim at this speed (e.g. too slow for the wing): skip it
+                if abs(float(u0[0])) > limit_deg or abs(float(u0[1])) > limit_deg:
+                    continue                    # "trim" past the surfaces' command limit is not a flight condition
                 A, B = linearize(vp, x0, u0)
                 Ar, Br, _ = reduced(A, B)
                 As, Bs = Ar[np.ix_(STATE_IDX, STATE_IDX)], Br[STATE_IDX, :]
                 Ad, Bd, T = _augmented_from_linear(vp, As, Bs, u0, float(s), dt, self.delay_steps)
                 tnu, tu, alon, blinv = steady_turn_sensitivity(As, Bs)
-                cached.append((Ad, Bd, T, tnu, tu, alon, blinv))
+                cached.append((float(s), (Ad, Bd, T, tnu, tu, alon, blinv)))
+                ok_speeds.append(float(s))
+            if not ok_speeds:
+                raise RuntimeError(f"no level trim inside the surface limits at any scheduled speed "
+                                   f"{tuple(float(s) for s in self.speeds)}")
             if len(_PLANT_LIN_CACHE) >= 32:
                 _PLANT_LIN_CACHE.clear()
             _PLANT_LIN_CACHE[key] = cached
+        self.speeds = np.asarray([s for s, _ in cached], float)
+        cached = [c for _, c in cached]
+        if self.speeds[0] > float(engage_speed):            # never engage below the slowest trimmed design speed
+            engage_speed = float(self.speeds[0])
+            self.disengage_speed = 0.85 * engage_speed
         ks, ts, t_nus, t_us, t_alons, t_blins = [], [], [], [], [], []
         for Ad, Bd, T, tnu, tu, alon, blinv in cached:
             ks.append(_solve_delay_lqr(Ad, Bd, dt, weights))

@@ -108,15 +108,15 @@ class VehiclePhysics:
         wet_main_nom = float(np.clip(z_fly_nom + p["main_pos_z"], 0.0, p["hull_offset"] + p["main_pos_z"]))
         wet_elev_nom = float(np.clip(z_fly_nom + p["elev_pos_z"], 0.0, p["hull_offset"] + p["elev_pos_z"]))
         if p.get("sway_yaw_added_mass", True):
-            added_mass_sway, added_inertia_yaw = strip_added_mass_sway_yaw([
-                (p["main_strut_chord"], wet_main_nom, p["main_pos_x"]),
-                (p["elev_strut_chord"], wet_elev_nom, p["elev_pos_x"]),
-            ])
+            added_mass_sway, added_inertia_yaw = strip_added_mass_sway_yaw(
+                [(p["main_strut_chord"], wet_main_nom, p["main_pos_x"])] * max(int(p.get("main_strut_count", 1)), 1)
+                + [(p["elev_strut_chord"], wet_elev_nom, p["elev_pos_x"])])
         else:
             added_mass_sway, added_inertia_yaw = 0.0, 0.0
         # Distributed hull hydrostatics (cross-referenced against Fossen ch.4 GM_T / GM_L, see docs/15).
         self.hull = HullHydrostatics(p["hull_length"], p["hull_beam"], p["hull_x"],
-                                     p["hull_offset"], p["max_draft"])
+                                     p["hull_offset"], p["max_draft"],
+                                     twin_spacing=float(p.get("hull_twin_spacing", 0.0) or 0.0))
         self.waterplane_area = self.hull.waterplane_area
         self.rigid_body = RigidBody(
             mass=p["mass"], I_b=np.diag([p["ixx"], p["iyy"], p["izz"]]),
@@ -133,13 +133,17 @@ class VehiclePhysics:
         flap_cm = (thin_airfoil_coeffs(p["main_flap_frac"])["cm_delta"] * p["main_flap_span_frac"]
                    * p.get("flap_cm_factor", 0.8)) if p.get("flap_moment", True) else 0.0
         stall_deg = p.get("flap_stall_deg", 15.0) if p.get("main_actuation", "flap") == "flap" else None
+        # Part-span flap position: main_flap_center_y [m from the centreline] places the flap's extra force at the
+        # flap instead of at the half's centroid (main_lateral_offset). None = the lumped model (no offset).
+        yc = p.get("main_flap_center_y")
+        flap_dy = (float(p["main_lateral_offset"]) - float(yc)) if (yc is not None and p.get("main_actuation", "flap") == "flap") else 0.0
         self.left_foil = Foil(
             FoilGeometry(chord=p["main_chord"], span=p["main_span"], aoa_offset=p.get("main_incidence_deg", 0.0)),
             polar,
             r_attach=np.array([p["main_pos_x"], -p["main_lateral_offset"], p["main_pos_z"]]),
             flap_effectiveness=self.main_flap_eff,
             oswald_efficiency=MAIN_FOIL_OSWALD_EFFICIENCY, flap_cm_delta=flap_cm, flap_stall_deg=stall_deg,
-            cavitation_model=cav_on,
+            cavitation_model=cav_on, flap_dy=flap_dy,
         )
         self.right_foil = Foil(
             FoilGeometry(chord=p["main_chord"], span=p["main_span"], aoa_offset=p.get("main_incidence_deg", 0.0)),
@@ -147,7 +151,7 @@ class VehiclePhysics:
             r_attach=np.array([p["main_pos_x"], p["main_lateral_offset"], p["main_pos_z"]]),
             flap_effectiveness=self.main_flap_eff,
             oswald_efficiency=MAIN_FOIL_OSWALD_EFFICIENCY, flap_cm_delta=flap_cm, flap_stall_deg=stall_deg,
-            cavitation_model=cav_on,
+            cavitation_model=cav_on, flap_dy=-flap_dy,
         )
         self.elev_foil = Foil(
             FoilGeometry(chord=p["elev_chord"], span=p["elev_span"]),
@@ -191,6 +195,7 @@ class VehiclePhysics:
         self.actuator_model = p.get("actuator_model", "servo")
         self.hinges = surface_models(p)
         self.lqr = None
+        self.lqr_error: str | None = None                 # why there is no LQR (cannot trim at its design speeds)
         self._lqr_spare = None
         self.sensors = None
         self._last_cmds = dict.fromkeys(("delta_main", "delta_elev", "delta_roll"), 0.0)
@@ -302,18 +307,41 @@ class VehiclePhysics:
 
     def _build_lqr(self):
         """Scheduled LQR (control/lqr.py), designed on a PID-configured copy of this plant."""
+        self.lqr, self.lqr_error = self.make_lqr()
+        if self.lqr is not None:
+            self.lqr.auto_handback = (self.params.get("controller") == "auto")
+
+    def make_lqr(self, params: dict | None = None):
+        """Design a scheduled LQR for `params` (default: this boat's). Returns (controller, None), or (None, reason)
+        when the boat cannot trim at enough of the scheduled speeds (e.g. a 0 deg wing below its flying speed), in
+        which case it flies on the PID loops. Safe to call from a background thread."""
         from hydrofoil.control.lqr import LQRController
         # designed on the NOMINAL CG: the controller cannot know where the rider sits (cg_offset is the truth)
-        p = dict(self.params, controller="pid", cg_offset=(0.0, 0.0), cg_z=0.0, supervisor=False)
+        p = dict(params if params is not None else self.params, controller="pid", cg_offset=(0.0, 0.0), cg_z=0.0,
+                 supervisor=False)
         # design latency: the loop delay the gains are computed for. Defaults to the drive model's command
         # delay; on hardware set lqr_delay_s to the MEASURED sensor-to-surface latency.
         delay = p.get("lqr_delay_s")
         if delay is None:
             delay = dict(DEFAULT_SERVO_PARAMS, **(p.get("servo_params") or {}))["delay_s"]
-        self.lqr = LQRController(VehiclePhysics(p), p["dt"], weights=p.get("lqr_weights"), delay_s=delay,
+        try:
+            return LQRController(VehiclePhysics(p), p["dt"], weights=p.get("lqr_weights"), delay_s=delay,
                                  speeds=tuple(p.get("lqr_speeds", (3.0, 4.0, 5.0, 6.0, 7.0))),
-                                 engage_speed=p.get("lqr_engage_speed", 3.2),
-                                 auto_handback=(self.params.get("controller") == "auto"))
+                                 engage_speed=p.get("lqr_engage_speed", 3.2)), None
+        except (RuntimeError, ValueError, np.linalg.LinAlgError) as e:
+            import warnings
+            warnings.warn(f"LQR not available for this boat ({e}); using the PID loops")
+            return None, str(e)
+
+    def set_main_incidence(self, deg: float) -> float:
+        """Change the main wing's fixed mounting angle [deg] live. Physics follows at once; the LQR gains and the
+        trim feed-forward were designed for the old angle, so callers should rebuild them (see the viewer)."""
+        deg = float(deg)
+        self.params["main_incidence_deg"] = deg
+        for f in (self.left_foil, self.right_foil):
+            f.geometry.aoa_offset = deg
+        self._eta_turn_cache = None
+        return deg
 
     def set_controller_mode(self, mode: str) -> str:
         """Switch flight controller mode at runtime between 'auto', 'lqr', and 'pid'."""
@@ -363,9 +391,11 @@ class VehiclePhysics:
                     "blending_in": False, "blending_out": False, "blend": 0.0,
                     "reason": "Manual PID mode — three independent SISO loops control height, pitch, and roll"}
         if self.lqr is None:
+            reason = ("PID active while LQR initializes" if not getattr(self, "lqr_error", None) else
+                      "LQR unavailable: this boat cannot fly level at the LQR design speeds "
+                      "(raise the wing mounting angle or the speed); the PID loops are flying")
             return {"mode": mode, "active": "PID", "engaged": False,
-                    "blending_in": False, "blending_out": False, "blend": 0.0,
-                    "reason": "PID active while LQR initializes"}
+                    "blending_in": False, "blending_out": False, "blend": 0.0, "reason": reason}
         st = self.lqr.status_dict(u)
         st["mode"] = mode
         if self.supervisor is not None and self.supervisor.mode == "DISPLACEMENT":
@@ -798,7 +828,7 @@ class VehiclePhysics:
             return strut.generalized_force(nu_rel, span=wet, r_attach=r, ventilation=self._vent.get(name, 0.0))
 
         tau = np.zeros(6)
-        tau += strut_force("main_strut")
+        tau += strut_force("main_strut") * max(int(p.get("main_strut_count", 1)), 1)   # symmetric pair: same moments
         tau += strut_force("elev_strut")
         dl_raw = cmds["delta_left"] if "delta_left" in cmds else (cmds["delta_main"] - cmds["delta_roll"])
         dr_raw = cmds["delta_right"] if "delta_right" in cmds else (cmds["delta_main"] + cmds["delta_roll"])
