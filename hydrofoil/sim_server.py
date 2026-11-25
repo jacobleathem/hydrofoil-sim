@@ -38,7 +38,8 @@ _last_tune_data: dict = {"status": "idle"}
 _auto_saved_sig: tuple | None = None
 
 FIELDS = {   # name: (choices or None for free numeric, default)
-    "preset": (("model", "manned"), "manned"),
+    "preset": (("cad", "manned", "model"), "cad"),
+    "cockpit_buoyancy": (("on", "off"), "on"),
     "supervisor": (("off", "on"), "on"),
     "controller": (("auto", "lqr", "pid"), "auto"),
     "allocator": (("jacobian", "legacy"), "jacobian"),
@@ -52,6 +53,7 @@ FIELDS = {   # name: (choices or None for free numeric, default)
 
 LABELS = {
     "preset": "Boat",
+    "cockpit_buoyancy": "Cockpit box buoyancy (CAD boat)",
     "supervisor": "Supervisor",
     "controller": "Flight controller",
     "allocator": "Flap allocator",
@@ -107,6 +109,8 @@ def start(form: dict) -> None:
            "--wave-type", v["wave_type"]]
     if v["supervisor"] == "on":
         cmd.append("--supervisor")
+    if v["preset"] == "cad":
+        cmd += ["--cockpit-buoyancy", v["cockpit_buoyancy"]]
     if v["waves"] == "on":
         cmd.append("--waves")
     cmd += ["--duration", "36000", "--api-port", str(API_PORT)]
@@ -148,23 +152,31 @@ EDIT_KEYS = ["main_chord", "main_span", "main_incidence_deg", "main_flap_frac", 
              "flying_height", "target_speed", "max_thrust"]
 
 
-def design_info(preset: str) -> dict:
+def design_info(preset: str, cockpit_buoyancy: bool | None = None) -> dict:
     """Preset values for the editor fields, and what is saved for this preset."""
-    from hydrofoil.params import DEFAULT_PARAMS, MANNED_PARAMS
-    p = MANNED_PARAMS if preset == "manned" else DEFAULT_PARAMS
+    from hydrofoil.params import preset_params, resolve_cad_hull
+    p = preset_params(preset)
+    if cockpit_buoyancy is not None and "pontoon_diameter" in p:
+        p["cockpit_buoyancy"] = bool(cockpit_buoyancy)
+        resolve_cad_hull(p)
     payloads = p.get("default_payloads", [])
     base = {k: p[k] for k in EDIT_KEYS}
     base["strut_length"] = p["hull_offset"] + p["main_pos_z"]
     base["empty_mass"] = float(p["mass"] - sum(float(q["mass"]) for q in payloads))
+    base["cockpit_buoyancy"] = bool(p.get("cockpit_buoyancy", True))
     geom = {k: p[k] for k in ("hull_length", "hull_beam", "hull_x", "main_lateral_offset")}
+    geom["hull_twin_spacing"] = float(p.get("hull_twin_spacing", 0.0) or 0.0)
+    geom["cockpit_box"] = p.get("cockpit_box")
+    geom["hull_boxes"] = list(p.get("hull_boxes") or ())
+    geom["cockpit_buoyancy"] = bool(p.get("cockpit_buoyancy", True))
     return {"preset": preset, "base": base, "payloads": payloads, "geom": geom,
             "saved": load_overrides().get(preset, {})}
 
 
 def design_preview(preset: str, overrides: dict) -> dict:
-    from hydrofoil.params import DEFAULT_PARAMS, MANNED_PARAMS
+    from hydrofoil.params import preset_params, resolve_cad_hull
     from hydrofoil.design import apply_design, derived, design_summary
-    p = dict(MANNED_PARAMS if preset == "manned" else DEFAULT_PARAMS)
+    p = resolve_cad_hull(preset_params(preset))
     design_only = {k: v for k, v in overrides.items() if k not in ("lqr_weights",) and not k.startswith(("kp_", "ki_", "kd_"))}
     e = apply_design(p, design_only)
     base_d = derived(p, include_summary=False)
@@ -173,7 +185,11 @@ def design_preview(preset: str, overrides: dict) -> dict:
     edit_d["summary"] = design_summary(base_d, edit_d, e)
     return {"base": base_d, "edited": edit_d,
             "edited_geom": {k: e[k] for k in ("main_chord", "main_span", "main_lateral_offset", "elev_chord", "elev_span",
-                                               "elev_pos_x", "hull_length", "hull_beam", "hull_x")}}
+                                               "elev_pos_x", "hull_length", "hull_beam", "hull_x")}
+                           | {"hull_twin_spacing": float(e.get("hull_twin_spacing", 0.0) or 0.0),
+                              "cockpit_box": e.get("cockpit_box"),
+                              "hull_boxes": list(e.get("hull_boxes") or ()),
+                              "cockpit_buoyancy": bool(e.get("cockpit_buoyancy", True))}}
 
 
 def _persist_tuned(preset: str, vals: dict) -> None:
@@ -186,10 +202,10 @@ def _persist_tuned(preset: str, vals: dict) -> None:
 
 def stored_controller_values(preset: str) -> dict:
     """Return both preset defaults and persisted backend overrides for PID gains and LQR weights."""
-    from hydrofoil.params import DEFAULT_PARAMS, MANNED_PARAMS
+    from hydrofoil.params import preset_params
     from hydrofoil.control.lqr import DEFAULT_WEIGHTS
     from hydrofoil.tuning.autotune import PID_KEYS
-    p = MANNED_PARAMS if preset == "manned" else DEFAULT_PARAMS
+    p = preset_params(preset)
     ov = load_overrides().get(preset, {})
     defaults_pid = {k: float(p[k]) for k in PID_KEYS}
     stored_pid = {k: float(ov.get(k, p[k])) for k in PID_KEYS}
@@ -205,15 +221,17 @@ def stored_controller_values(preset: str) -> dict:
     }
 
 
-def tune_start(preset: str, target: str):
+def tune_start(preset: str, target: str, cockpit_buoyancy: bool | None = None):
     global tune_proc, _last_tune_data, _auto_saved_sig
     if tune_proc is not None and tune_proc.poll() is None:
         return False
     _ensure_state_dir()
     _auto_saved_sig = None
-    ov = load_overrides().get(preset)
+    ov = dict(load_overrides().get(preset) or {})
+    if preset == "cad" and cockpit_buoyancy is not None:
+        ov["cockpit_buoyancy"] = bool(cockpit_buoyancy)
     f = STATE_DIR / f"overrides_{preset}.json"
-    f.write_text(json.dumps(ov or {}))
+    f.write_text(json.dumps(ov))
     _last_tune_data = {"status": "starting", "preset": preset, "target": target}
     TUNE_PROGRESS.write_text(json.dumps(_last_tune_data))
     cmd = [sys.executable, "-m", "hydrofoil.tuning.autotune", "--preset", preset, "--target", target,
@@ -241,7 +259,7 @@ def tune_status(preset_hint: str | None = None) -> dict:
         d["status"] = "failed"
         log_path = STATE_DIR / "tune.log"
         d["log"] = log_path.read_text(errors="replace")[-1500:] if log_path.exists() else ""
-    preset = d.get("preset") or preset_hint or last_form.get("preset", "manned")
+    preset = d.get("preset") or preset_hint or last_form.get("preset", "cad")
     best = d.get("best")
     stages = d.get("stages") or []
     improved = bool(best and (d.get("status") == "done" or not stages or best["cost"] <= stages[0]["cost"]))
@@ -259,7 +277,7 @@ def tune_apply() -> dict:
     d = tune_status()
     if not d.get("best"):
         return {"ok": False}
-    preset = d.get("preset") or last_form.get("preset", "manned")
+    preset = d.get("preset") or last_form.get("preset", "cad")
     vals = d["best"]["values"]
     _persist_tuned(preset, vals)
     return {"ok": True, "applied": vals, "stored": stored_controller_values(preset)}
@@ -269,7 +287,12 @@ def page() -> str:
     def select(name):
         choices, d = FIELDS[name]
         cur = last_form.get(name, d)
-        opts = "".join(f'<option{" selected" if c == cur else ""}>{c}</option>' for c in choices)
+        from hydrofoil.params import PRESET_LABELS
+        labels = (PRESET_LABELS if name == "preset" else
+                  {"on": "On (box floats)", "off": "Off (pontoons scaled to hold the boat)"} if name == "cockpit_buoyancy"
+                  else {})
+        opts = "".join(f'<option value="{c}"{" selected" if c == cur else ""}>{html.escape(labels.get(c, c))}</option>'
+                       for c in choices)
         return f'<label>{LABELS[name]}<select name="{name}">{opts}</select></label>'
 
     def number(name):
@@ -305,8 +328,11 @@ class Handler(BaseHTTPRequestHandler):
         if self.path in ("/", "/index.html"):
             return self._send(page())
         if self.path.startswith("/api/design"):
-            preset = parse_qs(self.path.partition("?")[2]).get("preset", [last_form.get("preset", "manned")])[0]
-            return self._json(design_info(preset))
+            qs = parse_qs(self.path.partition("?")[2])
+            preset = qs.get("preset", [last_form.get("preset", "cad")])[0]
+            cb_raw = qs.get("cockpit_buoyancy", [None])[0]
+            cb = None if cb_raw is None else (cb_raw.lower() in ("on", "true", "1"))
+            return self._json(design_info(preset, cockpit_buoyancy=cb))
         if self.path.startswith("/api/tune/status"):
             preset = parse_qs(self.path.partition("?")[2]).get("preset", [None])[0]
             return self._json(tune_status(preset))
@@ -332,7 +358,7 @@ class Handler(BaseHTTPRequestHandler):
                 body = json.loads(raw or "{}")
             except ValueError:
                 return self._json({"error": "bad json"}, 400)
-            preset = body.get("preset") or last_form.get("preset", "manned")
+            preset = body.get("preset") or last_form.get("preset", "cad")
             try:
                 if self.path == "/api/design/preview":
                     return self._json(design_preview(preset, body.get("overrides", {})))
@@ -345,13 +371,34 @@ class Handler(BaseHTTPRequestHandler):
                         allov[preset] = keep
                     save_overrides(allov)
                     return self._json({"ok": True})
+                if self.path == "/api/load_cad":
+                    # "Load our CAD boat": drop every saved edit and tuned gain for the CAD preset so the boat is
+                    # exactly CAD_PARAMS (hydrofoil/params.py), then (re)launch the 3D view with it.
+                    allov = load_overrides()
+                    allov.pop("cad", None)
+                    save_overrides(allov)
+                    f = STATE_DIR / "overrides_cad.json"
+                    if f.exists():
+                        f.unlink()
+                    form_in = body.get("form") if isinstance(body.get("form"), dict) else {}
+                    form = {k: [str(form_in[k])] for k in FIELDS if k in form_in}
+                    for k, v in last_form.items():
+                        form.setdefault(k, [v])
+                    form["preset"] = ["cad"]
+                    start(form)
+                    return self._json({"ok": True, "preset": "cad"})
                 if self.path == "/api/relaunch":
-                    form = {k: [v] for k, v in last_form.items()} or {"preset": [preset]}
+                    form_in = body.get("form") if isinstance(body.get("form"), dict) else {}
+                    form = {k: [str(form_in[k])] for k in FIELDS if k in form_in}
+                    for k, v in last_form.items():
+                        form.setdefault(k, [v])
                     form["preset"] = [preset]
                     start(form)
                     return self._json({"ok": True})
                 if self.path == "/api/tune/start":
-                    return self._json({"ok": tune_start(preset, body.get("target", "auto"))})
+                    cb_val = body.get("cockpit_buoyancy")
+                    cb = None if cb_val is None else (str(cb_val).lower() in ("on", "true", "1") if isinstance(cb_val, str) else bool(cb_val))
+                    return self._json({"ok": tune_start(preset, body.get("target", "auto"), cockpit_buoyancy=cb)})
                 if self.path == "/api/tune/apply":
                     return self._json(tune_apply())
                 if self.path == "/api/tune/clear":

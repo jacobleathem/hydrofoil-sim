@@ -46,9 +46,9 @@ if errorlevel 1 (
 :menu
 echo.
 echo Hydrofoil Sim Launcher ^(Python: %PY%^)
-echo   [1] Web Dashboard + Boat Editor + 3D Viewer Launcher ^(default^)
-echo   [2] Manned 275 kg 3D Viewer - Auto Combined PID/LQR + Supervisor + Waves + Noisy Sensors
-echo   [3] Manned 275 kg 3D Viewer - Auto Combined PID/LQR + Supervisor + Calm
+echo   [1] Web Dashboard + Boat Editor + CAD Boot-Up ^(default^)
+echo   [2] CAD Boat 3D Viewer - Auto Combined + Supervisor + Waves + Noisy Sensors
+echo   [3] Manned 275 kg 3D Viewer - Auto Combined + Supervisor + Calm
 echo   [4] Model 25 kg 3D Viewer   - Raw LQR/PID + Calm
 echo   [5] Model Consistency Check
 echo   [6] Run Pytest Suite
@@ -61,11 +61,11 @@ if "%CHOICE%"=="1" (
     echo Starting web dashboard on http://127.0.0.1:8765 ^(Ctrl+C to stop^)...
     "%PY%" -m hydrofoil.sim_server
 ) else if "%CHOICE%"=="2" (
-    "%PY%" -m hydrofoil.viewer --preset manned --controller auto --supervisor --sensors noisy --waves
+    "%PY%" -m hydrofoil.viewer --preset cad --controller auto --supervisor --sensors noisy --waves
 ) else if "%CHOICE%"=="3" (
     "%PY%" -m hydrofoil.viewer --preset manned --controller auto --supervisor
 ) else if "%CHOICE%"=="4" (
-    "%PY%" -m hydrofoil.viewer
+    "%PY%" -m hydrofoil.viewer --preset model
 ) else if "%CHOICE%"=="5" (
     "%PY%" -m hydrofoil.consistency
     pause

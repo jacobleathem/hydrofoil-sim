@@ -97,8 +97,9 @@ def mass_properties(p: dict, payloads: list | None, empty_mass: float | None = N
 
 def _wetted_proxy(p: dict) -> float:
     L, B = p["hull_length"], p["hull_beam"]
-    d = min(p["mass"] / max(RHO_WATER * L * B, 1e-6), p["max_draft"])
-    return L * B + 2.0 * d * (L + B)
+    n = 2 if float(p.get("hull_twin_spacing", 0.0) or 0.0) > 0.0 else 1
+    d = min(p["mass"] / max(RHO_WATER * n * L * B, 1e-6), p["max_draft"])
+    return n * (L * B + 2.0 * d * (L + B))
 
 
 def _foil_eff(p: dict) -> float:
@@ -153,10 +154,16 @@ def _scale_inertias_and_hull(old: dict, p: dict, ov: dict):
 
 def _scale_structures_drives_and_gains(old: dict, p: dict, ov: dict):
     """Auto-derive surface inertia, GJ scaling, shaft sizing, propulsion scaling, and first-order PID scaling."""
-    main_keys = {"main_chord", "main_span", "main_flap_frac", "main_flap_span_frac", "main_flap_setback"}
+    main_keys = {"main_chord", "main_span", "main_flap_frac", "main_flap_span_frac", "main_flap_setback", "main_flap_chord"}
     if main_keys & set(ov):
+        if "main_flap_chord" not in ov and p.get("main_flap_chord") is not None and ({"main_chord", "main_flap_frac"} & set(ov)):
+            c_old = max(float(old["main_chord"]), 1e-6)
+            f_old = max(float(old["main_flap_frac"]), 1e-6)
+            p["main_flap_chord"] = round(float(p["main_flap_chord"]) * (p["main_chord"] / c_old) * (p["main_flap_frac"] / f_old), 4)
+        c_flap_n = p.get("main_flap_chord")
+        c_hinge_n = (float(c_flap_n) / max(float(p["main_flap_frac"]), 1e-4)) if (c_flap_n is not None and float(c_flap_n) > 0.0) else p["main_chord"]
         if "main_surface_inertia" not in ov and p.get("main_actuation", "flap") == "flap":
-            j = flap_inertia(p["main_chord"], p["main_span"] * p.get("main_flap_span_frac", 1.0),
+            j = flap_inertia(c_hinge_n, p["main_span"] * p.get("main_flap_span_frac", 1.0),
                              p["main_flap_frac"], p.get("main_flap_setback", 0.0))
             p["main_surface_inertia"] = float(f"{j:.3g}")
         if "main_flap_GJ" not in ov and p.get("main_flap_GJ") is not None:
@@ -181,7 +188,7 @@ def _scale_structures_drives_and_gains(old: dict, p: dict, ov: dict):
             p["prop_power_max"] = round(old["prop_power_max"] * (p["mass"] / m_old)
                                          * (p["target_speed"] / max(old["target_speed"], 0.5)), 1)
     # First-order control-authority gain scaling so resized craft stay flyable before re-autotuning
-    if (main_keys | {"mass", "payloads", "elev_chord", "elev_span", "elev_pos_x", "main_lateral_offset", "ixx", "iyy"}) & set(ov):
+    if (main_keys | {"mass", "payloads", "elev_chord", "elev_span", "elev_pos_x", "main_lateral_offset", "main_flap_center_y", "ixx", "iyy"}) & set(ov):
         mh_o, ip_o = strip_added_mass_heave_pitch([(old["main_chord"], old["main_span"], old["main_pos_x"]),
                                                    (old["main_chord"], old["main_span"], old["main_pos_x"]),
                                                    (old["elev_chord"], old["elev_span"], old["elev_pos_x"])])
@@ -206,8 +213,10 @@ def _scale_structures_drives_and_gains(old: dict, p: dict, ov: dict):
         for k in ("kp_pitch", "ki_pitch", "kd_pitch"):
             if k not in ov and abs(sp_ - 1.0) > 1e-6:
                 p[k] = round(old[k] * sp_, 5)
-        arm_r_o = max(old["main_lateral_offset"] * auth_h_o, 1e-6)
-        arm_r_n = max(p["main_lateral_offset"] * auth_h_n, 1e-6)
+        y_roll_o = float(old.get("main_flap_center_y") or old["main_lateral_offset"])
+        y_roll_n = float(p.get("main_flap_center_y") or p["main_lateral_offset"])
+        arm_r_o = max(y_roll_o * auth_h_o, 1e-6)
+        arm_r_n = max(y_roll_n * auth_h_n, 1e-6)
         sr = ((p["ixx"] + ir_n) / (old["ixx"] + ir_o)) * (arm_r_o / arm_r_n)
         for k in ("kp_roll", "kd_roll"):
             if k not in ov and abs(sr - 1.0) > 1e-6:
@@ -226,7 +235,7 @@ def apply_design(p: dict, overrides: dict) -> dict:
     empty_mass = ov.pop("empty_mass", None)
     strut = ov.pop("strut_length", None)
     extra_keys = ("lqr_weights", "gear_rated_torque", "shaft_diameter", "prop_power_max",
-                  "prop_tau_s", "dual_height", "gnss_fallback", "empty_mass", "mass_empty", "cg_z")
+                  "prop_tau_s", "dual_height", "gnss_fallback", "empty_mass", "mass_empty", "cg_z", "cockpit_buoyancy")
     for k, v in ov.items():
         if k in p or k in extra_keys:
             if k in p and isinstance(p[k], (int, float)) and not isinstance(p[k], bool) and v is None:
@@ -243,8 +252,13 @@ def apply_design(p: dict, overrides: dict) -> dict:
         if k in p and p[k] is not None:
             val = max(float(p[k]), lo)
             p[k] = min(val, hi) if hi is not None else val
-    if "main_span" in ov:
-        p["main_lateral_offset"] = 0.05 + p["main_span"] / 2
+    if "main_span" in ov and "main_lateral_offset" not in ov:
+        if abs(old["main_lateral_offset"] - (0.05 + 0.5 * old["main_span"])) < 1e-4:
+            p["main_lateral_offset"] = 0.05 + p["main_span"] / 2
+        else:
+            p["main_lateral_offset"] = old["main_lateral_offset"] * (p["main_span"] / max(old["main_span"], 1e-6))
+        if "main_flap_center_y" not in ov and p.get("main_flap_center_y") is not None:
+            p["main_flap_center_y"] = float(p["main_flap_center_y"]) * (p["main_span"] / max(old["main_span"], 1e-6))
     if strut is not None:
         strut_v = max(float(strut), 0.15)
         dz = p["main_pos_z"] - p["elev_pos_z"]
@@ -261,6 +275,9 @@ def apply_design(p: dict, overrides: dict) -> dict:
         p["cg_z"] = float(mp_["cg"][2])
         if payloads is not None:
             p["default_payloads"] = mp_["payloads"]
+    from hydrofoil.params import resolve_cad_hull
+    preserve_hull = {k for k in ("hull_beam", "max_draft") if k in ov}
+    resolve_cad_hull(p, preserve_user_dims=preserve_hull)
     if ov or payloads is not None or empty_mass is not None or strut is not None:
         ov_flags = dict(ov)
         if payloads is not None:
@@ -297,7 +314,7 @@ _CONTROL_KEYS = ("lqr_", "est_", "trim_ff", "kp_", "ki_", "kd_", "controller", "
 def trim_curve(p: dict, speeds=None) -> list[dict]:
     """Level trim at each speed (cached on the physical parameters only: controller settings do not change trim)."""
     warnings.simplefilter("ignore")
-    speeds = speeds if speeds is not None else np.round(np.arange(3.0, 12.01, 0.5), 2)
+    speeds = speeds if speeds is not None else np.round(np.arange(3.0, 16.01, 0.5), 2)   # 16: the CAD boat at 0 deg
     key = (repr(sorted((k, repr(v)) for k, v in p.items() if not k.startswith(_CONTROL_KEYS))), tuple(speeds))
     if key in _CURVES:
         return _CURVES[key]
@@ -410,6 +427,8 @@ def design_summary(base_d: dict | None, edit_d: dict, p: dict) -> dict:
 def derived(p: dict, include_summary: bool = True) -> dict:
     """What the design does, without flying it: wing loading, takeoff and cruise trim, power, margins."""
     warnings.simplefilter("ignore")
+    from hydrofoil.params import resolve_cad_hull
+    p = resolve_cad_hull(dict(p))
     mc = max(float(p["main_chord"]), 1e-6)
     ms = max(float(p["main_span"]), 1e-6)
     S = max(2 * mc * ms, 1e-6)
@@ -422,12 +441,32 @@ def derived(p: dict, include_summary: bool = True) -> dict:
     cg = p.get("cg_offset", (0.0, 0.0))
     m_def = sum(q_i["mass"] for q_i in _sanitize_payloads(p.get("default_payloads", [])))
     m_empty = float(p.get("mass_empty", max(float(p["mass"]) - m_def, 0.0)))
+    n_h = 2 if float(p.get("hull_twin_spacing", 0.0) or 0.0) > 0.0 else 1
+    a_main = n_h * float(p["hull_length"]) * float(p["hull_beam"])
+    boxes = p.get("hull_boxes") or ()
+    m_need = float(p["mass"]) / RHO_WATER
+    d_eq = float(p["max_draft"])
+    if not boxes:
+        d_eq = min(m_need / max(a_main, 1e-6), float(p["max_draft"]))
+    else:
+        cuts = sorted({0.0, float(p["max_draft"]), *(float(b["height"]) for b in boxes)})
+        for lo_c, hi_c in zip(cuts[:-1], cuts[1:]):
+            v_lo = min(lo_c, float(p["max_draft"])) * a_main + sum(min(lo_c, float(b["height"])) * float(b["length"]) * float(b["beam"]) for b in boxes)
+            v_hi = min(hi_c, float(p["max_draft"])) * a_main + sum(min(hi_c, float(b["height"])) * float(b["length"]) * float(b["beam"]) for b in boxes)
+            if v_hi >= m_need - 1e-9 and v_hi > v_lo + 1e-9:
+                d_eq = lo_c + (m_need - v_lo) / (v_hi - v_lo) * (hi_c - lo_c)
+                break
+        else:
+            d_eq = cuts[-1]
     out = {
         "mass": p["mass"], "mass_empty": m_empty,
         "cg_x": cg[0], "cg_y": cg[1], "cg_z": float(p.get("cg_z", 0.0)),
         "ixx": float(p["ixx"]), "iyy": float(p["iyy"]), "izz": float(p["izz"]),
         "wing_area": S, "aspect_ratio": ms / mc, "wing_loading": W / S,
         "foil_depth": depth, "strut_length": p["hull_offset"] + p["main_pos_z"],
+        "floating_draft": float(d_eq),
+        "cockpit_buoyancy": bool(p.get("cockpit_buoyancy", True)),
+        "pontoon_diameter_used": p.get("pontoon_diameter_used"),
         "v_min_foil": ok[0]["speed"] if ok else None, "v_max_trim": max(c["speed"] for c in ok) if ok else None,
         "cruise_speed": p["target_speed"],
         "cruise_flap": cruise and cruise[0], "cruise_elev": cruise and cruise[1],

@@ -168,7 +168,7 @@ class Supervisor:
     def _h_min(self, phi_rad: float = 0.0) -> float:
         cmd_phi = min(self.bank_limit, abs(float(self.pilot["bank"]))) if self.mode == "FOILING" else abs(float(self.bank_ref))
         bank_deg = max(abs(float(np.degrees(phi_rad))), abs(float(self.bank_ref)), cmd_phi)
-        bank_boost = 0.5 * float(self.vp.params["hull_beam"]) * float(np.sin(np.radians(bank_deg)))
+        bank_boost = 0.5 * (float(self.vp.params["hull_beam"]) + float(self.vp.params.get("hull_twin_spacing", 0.0) or 0.0)) * float(np.sin(np.radians(bank_deg)))
         return self.c["h_min"] + self.c["wave_margin"] * self.wave_amp + bank_boost
 
     def _ramp(self, cur, target, rate, dt):
@@ -501,7 +501,7 @@ def compute_turn_envelope(
     hull_off = float(getattr(vp, "hull_offset", p["hull_offset"]))
     z_main = float(vp.left_foil.r_attach[2]) if hasattr(vp, "left_foil") else float(p["main_pos_z"])
     y_tip = float(p["main_lateral_offset"]) + 0.5 * float(p["main_span"])
-    half_b = 0.5 * float(p["hull_beam"])
+    half_b = 0.5 * (float(p["hull_beam"]) + float(p.get("hull_twin_spacing", 0.0) or 0.0))   # outer edge (catamaran: outer pontoon side)
     tip_req = float(c["tip_hc_min"]) * float(p["main_chord"])
 
     def _solve_cos_sin(a_cos: float, b_sin: float, rhs: float) -> float:
@@ -514,8 +514,8 @@ def compute_turn_envelope(
         alpha = float(np.arctan2(b_sin, a_cos))
         return max(0.0, float(np.degrees(np.arccos(ratio) - alpha)))
 
-    rhs_lens = tip_req + float(c["chine_clear_min"]) + 2.0 * wm_a - hull_off
-    b_lens = _solve_cos_sin(z_main, y_tip + half_b, rhs_lens)
+    rhs_lens = tip_req + float(c["chine_clear_min"]) + 2.0 * wm_a
+    b_lens = _solve_cos_sin(z_main + hull_off, y_tip + half_b, rhs_lens)
 
     h_tgt = float(height_ref if height_ref is not None else p.get("flying_height", c["h_default"]))
     z_cg = hull_off - max(h_tgt, float(c["h_min"]) + wm_a)

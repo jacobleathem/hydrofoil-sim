@@ -44,7 +44,16 @@ def relay_test(params: dict, loop: str, d: float | None = None, T: float = 16.0)
     from hydrofoil.waves.airy import CalmWater
     p = dict(params, controller="pid", sensors="ideal", supervisor=False)
     vp = VehiclePhysics(p)
-    x, _ = trim(vp, p["target_speed"], u0=(5.0, 0.0, 0.0, 200.0), max_iter=80)
+    x = None
+    for v_try in (p["target_speed"], float((p.get("lqr_speeds") or (p["target_speed"],))[0])):
+        try:
+            x, _ = trim(vp, v_try, u0=(5.0, 0.0, 0.0, 200.0), max_iter=80)
+            vp.params["target_speed"] = v_try
+            break
+        except RuntimeError:
+            continue
+    if x is None:
+        return {"ok": False, "why": "cannot trim at target speed"}
     s = x.copy()
     if loop == "roll":
         s[3] = np.radians(1.0)                                 # kick the roll loop off zero so the relay starts
@@ -66,7 +75,7 @@ def relay_test(params: dict, loop: str, d: float | None = None, T: float = 16.0)
         t += p["dt"]
         if not np.all(np.isfinite(s)) or abs(np.degrees(s[3])) > 25:
             return {"ok": False, "why": "diverged during the relay test"}
-        zref = p["hull_offset"] - p["flying_height"]
+        zref = vp.hull_offset - p["flying_height"]
         e = {"heave": s[2] - zref, "pitch": np.degrees(s[4]) - p["theta_ref"], "roll": np.degrees(s[3]) - p["phi_ref"]}[loop]
         rec.append((t, e))
     r = np.array(rec)

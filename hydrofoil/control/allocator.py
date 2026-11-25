@@ -604,9 +604,9 @@ class ControlAllocator:
         step_hi = [sb[n][1] for n in DRIVES]
 
         mg = max(float(p["mass"]) * G, 1.0)
-        y_lat = max(float(p["main_lateral_offset"]), 0.1)
+        y_lat = max(float(p.get("main_flap_center_y") or p["main_lateral_offset"]), 0.05)
         x_tail = max(abs(float(p["elev_pos_x"])), 0.2)
-        inv_s2 = [1.0 / (mg * mg), 1.0 / ((mg * y_lat) ** 2), 1.0 / ((mg * x_tail) ** 2), 1.0 / ((0.25 * mg * y_lat) ** 2)]
+        inv_s2 = [1.0 / (mg * mg), 1.0 / ((mg * y_lat) ** 2), 1.0 / ((mg * x_tail) ** 2), 1.0 / ((0.25 * mg * max(float(p["main_lateral_offset"]), 0.1)) ** 2)]
 
         if jam is not None and jam[0] in ("left", "right"):
             jam_idx = 0 if jam[0] == "left" else 1
@@ -840,6 +840,8 @@ class ControlAllocator:
             "lift_margin": lift_fin,
             "elev_reserve": elev_res_fin,
             "sigma_min": bounds_info["sigma_min"],
+            "cp_min_max": float(max(local_info["left"]["cp_min"], local_info["right"]["cp_min"], local_info["elev"]["cp_min"])),
+            "hc_min": float(min(local_info["left"]["submergence_hc"], local_info["right"]["submergence_hc"])),
             "saturated": sat_flags,
             "solve_ms": dt_ms,
         }

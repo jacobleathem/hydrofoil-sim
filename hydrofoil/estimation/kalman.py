@@ -45,15 +45,24 @@ class KalmanEstimator:
         for i, k in enumerate(MEAS_NAMES):
             H[i, MEAS_STATE[k]] = 1.0
         Qw = np.diag([q[k] ** 2 * dt for k in ("z", "phi", "theta", "v", "w", "p", "q", "r")])
-        Ads, Bds, Ls, trims = [], [], [], []
+        Ads, Bds, Ls, trims, ok_speeds = [], [], [], [], []
+        limit_deg = max(float(vp.params.get("flap_cmd_max_deg", 20.0)), float(vp.params.get("elev_cmd_max_deg", 20.0)))
         for sp in self.speeds:
-            x0, u0 = trim(vp, sp)
+            try:
+                x0, u0 = trim(vp, float(sp))
+            except RuntimeError:
+                continue
+            if abs(float(u0[0])) > limit_deg or abs(float(u0[1])) > limit_deg:
+                continue
             A, B = linearize(vp, x0, u0)
             Ar, Br, _ = reduced(A, B)
             Ad, Bd = _discretise(Ar[np.ix_(STATE_IDX, STATE_IDX)], Br[STATE_IDX, :], dt)
             P = solve_discrete_are(Ad.T, H.T, Qw, Rv)
             L = P @ H.T @ np.linalg.inv(H @ P @ H.T + Rv)
-            Ads.append(Ad); Bds.append(Bd); Ls.append(L); trims.append(u0[:3])
+            Ads.append(Ad); Bds.append(Bd); Ls.append(L); trims.append(u0[:3]); ok_speeds.append(float(sp))
+        if not ok_speeds:
+            raise RuntimeError(f"no level trim inside surface limits for KalmanEstimator at {tuple(float(s) for s in self.speeds)}")
+        self.speeds = np.asarray(ok_speeds, float)
         self.Ad, self.Bd, self.L, self.trim = map(np.asarray, (Ads, Bds, Ls, trims))
         self.H = H
         self._z_trim0 = float(vp.params["hull_offset"] - vp.params["flying_height"])

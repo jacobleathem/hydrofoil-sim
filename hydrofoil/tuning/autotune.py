@@ -35,9 +35,9 @@ LQR_KEYS = ["z", "theta", "phi", "w", "q", "iz", "du"]          # multipliers on
 
 
 def base_params(preset: str, overrides: dict | None = None) -> dict:
-    from hydrofoil.params import DEFAULT_PARAMS, MANNED_PARAMS
+    from hydrofoil.params import preset_params
     from hydrofoil.design import apply_design
-    p = dict(MANNED_PARAMS if preset == "manned" else DEFAULT_PARAMS)
+    p = preset_params(preset)
     return apply_design(p, overrides or {})
 
 
@@ -264,7 +264,7 @@ def _values(p: dict, target: str) -> dict:
 
 def main():
     ap = argparse.ArgumentParser(description="Autotune the flight controller across all flight phases")
-    ap.add_argument("--preset", choices=("model", "manned"), default="manned")
+    ap.add_argument("--preset", choices=("model", "manned", "cad"), default="manned")
     ap.add_argument("--target", choices=("auto", "pid", "lqr"), default="auto")
     ap.add_argument("--overrides", type=Path, help="JSON design overrides (boat editor)")
     ap.add_argument("--generations", type=int, default=6)

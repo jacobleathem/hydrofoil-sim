@@ -20,7 +20,7 @@ if str(ROOT) not in sys.path:
 
 from hydrofoil.constants import G
 from hydrofoil.linearize import trim
-from hydrofoil.params import MANNED_PARAMS
+from hydrofoil.params import PRESETS, preset_params
 from hydrofoil.vehicle import VehiclePhysics
 from hydrofoil.waves.airy import AiryWave, CalmWater, IrregularWave, encounter_frequency
 
@@ -44,10 +44,19 @@ def run_case(
     spread_s: float | None = 4.0,
     noise_seed: int = 100,
     wave_seed: int = 42,
+    preset: str = "manned",
 ) -> dict:
-    """Run one 8 m/s settled foilborne Auto+Noisy+Supervisor simulation and summarize metrics."""
+    """Run one settled foilborne Auto+Noisy+Supervisor simulation and summarize metrics."""
+    base = preset_params(preset)
+    v_run = float(base.get("target_speed", 8.0))
+    if preset == "cad":
+        base["main_incidence_deg"] = max(float(base.get("main_incidence_deg", 0.0)), 5.0)
+        base["cockpit_buoyancy"] = False
+        from hydrofoil.design import apply_design
+        base = apply_design(base, {"main_incidence_deg": base["main_incidence_deg"], "cockpit_buoyancy": False})
+        v_run = 8.5
     p = dict(
-        MANNED_PARAMS,
+        base,
         controller="auto",
         sensors="noisy",
         supervisor=True,
@@ -57,15 +66,17 @@ def run_case(
         wave_amplitude=amp,
         wave_wavelength=wavelength,
         wave_direction=direction_deg,
+        target_speed=v_run,
     )
     vp = VehiclePhysics(p)
     if vp.sensors is not None and hasattr(vp.sensors, "rng"):
         vp.sensors.rng = np.random.default_rng(noise_seed)
-    s, _ = trim(vp, 8.0)
+    s, _ = trim(vp, v_run)
     vp.supervisor.mode = "FOILING"
-    vp.supervisor.speed_ref = 8.0
-    vp.supervisor.height_ref = 0.50
-    vp.supervisor.pilot.update({"foil": True, "speed": 8.0, "height": 0.50, "bank": 0.0})
+    vp.supervisor.speed_ref = v_run
+    h_fly = float(base["flying_height"])
+    vp.supervisor.height_ref = h_fly
+    vp.supervisor.pilot.update({"foil": True, "speed": v_run, "height": h_fly, "bank": 0.0})
 
     dir_rad = float(np.radians(direction_deg))
     if wave_type == "irregular":
@@ -79,11 +90,11 @@ def run_case(
     else:
         wave = AiryWave(amplitude=amp, wavelength=wavelength, direction=dir_rad)
 
-    omega_e = encounter_frequency(float(wave.omega), 8.0, dir_rad)
+    omega_e = encounter_frequency(float(wave.omega), v_run, dir_rad)
     t_e = (2.0 * np.pi / abs(omega_e)) if abs(omega_e) > 1e-4 else float("inf")
 
     dt = float(p["dt"])
-    z_ref = vp.hull_offset - 0.50
+    z_ref = vp.hull_offset - h_fly
     # Warm up 2.0 s in calm flight so drives, HeaveFilter, KalmanEstimator, and LQR settle at trim
     t = 0.0
     for _ in range(int(round(2.0 / dt))):
@@ -151,13 +162,14 @@ def run_case(
 
 def main():
     ap = argparse.ArgumentParser(description="Directional and irregular JONSWAP wave quantification study")
+    ap.add_argument("--preset", choices=tuple(PRESETS), default="manned", help="craft preset (default: manned)")
     ap.add_argument("--duration", type=float, default=30.0, help="simulation duration per case [s]")
     ap.add_argument("--amp", type=float, default=0.12, help="regular amplitude / half Hs [m]")
     ap.add_argument("--wavelength", type=float, default=12.0, help="peak wavelength [m]")
     args = ap.parse_args()
 
-    reg_rows = [run_case(d, "regular", args.amp, args.wavelength, args.duration) for d in DIRECTIONS_DEG]
-    irr_rows = [run_case(d, "irregular", args.amp, args.wavelength, args.duration) for d in DIRECTIONS_DEG]
+    reg_rows = [run_case(d, "regular", args.amp, args.wavelength, args.duration, preset=args.preset) for d in DIRECTIONS_DEG]
+    irr_rows = [run_case(d, "irregular", args.amp, args.wavelength, args.duration, preset=args.preset) for d in DIRECTIONS_DEG]
 
     for title, rows in (
         (f"Regular Airy Wave (A={args.amp:.2f} m, lambda={args.wavelength:.1f} m, 8 m/s Auto+Noisy+Sup)", reg_rows),

@@ -41,7 +41,8 @@ TAU_ALLOW = 70e6        # Pa: 316 stainless shear yield 140 MPa / 2
 
 
 def preset(name: str) -> dict:
-    return dict(MANNED_PARAMS if name == "manned" else DEFAULT_PARAMS)
+    from hydrofoil.params import preset_params
+    return preset_params(name)
 
 
 def geometry_params(base: dict, cf: float | None = None, sf: float | None = None, sb: float | None = None,
@@ -136,7 +137,7 @@ def link_stiffness(L: float) -> list[dict]:
 
 def cmd_static(a):
     base = preset(a.preset)
-    speeds = (6.0, 8.0, 9.5) if a.preset == "manned" else (3.5, 4.0, 6.0)
+    speeds = {"manned": (6.0, 8.0, 9.5), "cad": (10.0, 12.0, 14.0)}.get(a.preset, (3.5, 4.0, 6.0))
     print(f"preset {a.preset}: chord {base['main_chord']} m, half-span {base['main_span']} m, "
           f"incidence {base.get('main_incidence_deg', 0)} deg, authority +-{AUTH_DEG} deg effective AoA "
           f"at {AUTH_RATE_DEG_S} deg/s")
@@ -274,9 +275,9 @@ def cmd_fly(a):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sp = ap.add_subparsers(dest="cmd", required=True)
-    s = sp.add_parser("static"); s.add_argument("--preset", default="manned", choices=("manned", "model"))
+    s = sp.add_parser("static"); s.add_argument("--preset", default="manned", choices=("manned", "model", "cad"))
     f = sp.add_parser("fly")
-    f.add_argument("--preset", default="manned", choices=("manned", "model"))
+    f.add_argument("--preset", default="manned", choices=("manned", "model", "cad"))
     f.add_argument("--cf", type=float, help="flap chord / foil chord (default: the preset's)")
     f.add_argument("--sf", type=float, help="flapped fraction of each half-span (default: the preset's)")
     f.add_argument("--sb", type=float, help="hinge set-back, fraction of flap chord (default: the preset's)")

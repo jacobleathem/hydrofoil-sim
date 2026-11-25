@@ -48,22 +48,29 @@ button.quiet { background:transparent; color:var(--spray); border-color:var(--ru
 button.small { padding:5px 10px; font-size:13px; }
 button:disabled { opacity:.4; cursor:default; }
 
-/* hero: side elevation */
-.elev { position:relative; background:linear-gradient(var(--sea), var(--sea)); }
-.elev svg { display:block; width:100%; height:clamp(220px, 34vw, 360px); }
-.elev .caption { position:absolute; left:24px; bottom:12px; color:var(--mist); font-size:13px; }
+/* hero: side elevation + top-down turning & oblique waves */
+.hero { display:grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr); gap:1px; background:var(--rule); }
+.elev { position:relative; background:linear-gradient(var(--sea), var(--sea)); min-width:0; }
+.elev svg { display:block; width:100%; height:clamp(220px, 30vw, 340px); }
+.elev .tag { position:absolute; left:14px; top:10px; font-size:12px; color:var(--spray); background:rgba(10,44,55,.84); border:1px solid var(--rule); border-radius:3px; padding:3px 9px; pointer-events:none; }
+.elev .caption { position:absolute; left:18px; bottom:10px; color:var(--mist); font-size:13px; }
 .elev .empty { position:absolute; inset:0; display:grid; place-items:center; color:var(--mist); text-align:center; padding:16px; }
 .elev .empty[hidden] { display:none; }
+@media (max-width: 960px) { .hero { grid-template-columns: 1fr; } }
 
 /* instruments */
 .gauges { display:grid; grid-template-columns: repeat(4, 1fr); background:var(--deep); }
+.gauges.sub { border-top:1px solid var(--rule); background:var(--trench); }
 .g { padding:14px 24px 16px; border-left:1px solid var(--rule); min-width:0; }
+.gauges.sub .g { padding:10px 24px 12px; }
 .g:first-child { border-left:0; }
 .g .k { color:var(--mist); font-size:14px; }
 .g .k .unit { position:relative; z-index:2; font-size:12px; padding:3px 8px; margin-left:6px; background:transparent; color:var(--spray); border:1px solid var(--rule); vertical-align:1px; }
 .g .v { font-size:clamp(40px, 5vw, 64px); line-height:1; color:var(--signal); margin-top:4px; }
+.gauges.sub .g .v { font-size:clamp(22px, 2.6vw, 30px); }
 .g .v small { font-size:.42em; color:var(--spray); margin-left:4px; font-weight:400; }
 .g .s { color:var(--mist); font-size:14px; margin-top:4px; }
+.gauges.sub .g .s { font-size:12.5px; }
 .g.dial { display:flex; gap:16px; align-items:center; }
 .g.dial svg { width:92px; height:92px; flex:none; }
 @media (max-width: 860px) { .gauges { grid-template-columns: 1fr 1fr; } .g:nth-child(3) { border-left:0; } .g { border-top:1px solid var(--rule); } }
@@ -227,7 +234,7 @@ details summary { cursor:pointer; color:var(--mist); padding:6px 0; }
 
 <form class="session" method="post" action="/start" id="session">
   __FIELDS__
-  <div class="go"><button>Launch viewer</button><button type="button" class="quiet" id="focus" disabled>Show 3D view</button><button class="quiet" formaction="/stop">Close viewer</button></div>
+  <div class="go"><button>Launch viewer</button><button type="button" id="loadCad" title="Reset the CAD preset to the exact values measured from our SolidWorks assembly (wings, struts, pontoons, propellers) and launch it">Load our CAD boat</button><button type="button" class="quiet" id="focus" disabled>Show 3D view</button><button class="quiet" formaction="/stop">Close viewer</button></div>
 </form>
 
 <nav class="tabs" role="tablist">
@@ -238,10 +245,18 @@ details summary { cursor:pointer; color:var(--mist); padding:6px 0; }
 </nav>
 
 <div id="tab-fly">
-<div class="elev">
-  <svg id="side" viewBox="0 0 1000 300" preserveAspectRatio="none" role="img" aria-label="Side view of the boat and the water"></svg>
-  <div class="caption" id="caption"></div>
-  <div class="empty" id="empty">Click <b>Launch viewer</b> above to open the 3D window and stream live flight telemetry here.</div>
+<div class="hero">
+  <div class="elev">
+    <div class="tag">Side Elevation (Wave Profile &amp; Foil Attitude)</div>
+    <svg id="side" viewBox="0 0 1000 300" preserveAspectRatio="none" role="img" aria-label="Side view of the boat and the water"></svg>
+    <div class="caption" id="caption"></div>
+    <div class="empty" id="empty">Click <b>Launch viewer</b> above to open the 3D window and stream live flight telemetry here.</div>
+  </div>
+  <div class="elev">
+    <div class="tag" id="topMeta">Top-Down Turning &amp; Oblique Waves</div>
+    <svg id="topView" viewBox="0 0 600 320" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Top-down planform, split flaps, turn radius, and oblique wave crests"></svg>
+    <div class="caption" id="topCap"></div>
+  </div>
 </div>
 
 <div class="gauges">
@@ -251,7 +266,13 @@ details summary { cursor:pointer; color:var(--mist); padding:6px 0; }
     <svg viewBox="-50 -50 100 100" id="heel" aria-label="Heel indicator"></svg>
     <div><div class="k">Heel / trim</div><div class="v num" id="gr" style="font-size:clamp(32px,3.6vw,48px)">–</div><div class="s" id="gr2"></div></div>
   </div>
-  <div class="g"><div class="k">Thrust</div><div class="v num" id="gt">–</div><div class="s" id="gt2"></div></div>
+  <div class="g"><div class="k">Thrust &amp; power</div><div class="v num" id="gt">–</div><div class="s" id="gt2"></div></div>
+</div>
+<div class="gauges sub">
+  <div class="g"><div class="k">Foil depth (h/c)</div><div class="v num" id="gd">–</div><div class="s" id="gd2">waiting for flight</div></div>
+  <div class="g"><div class="k">Cavitation (σ vs |Cp,min|)</div><div class="v num" id="gcav">–</div><div class="s" id="gcav2"></div></div>
+  <div class="g"><div class="k">Wave encounter (T_e / μ)</div><div class="v num" id="gwav">–</div><div class="s" id="gwav2"></div></div>
+  <div class="g"><div class="k">Heading &amp; sideslip (ψ / β)</div><div class="v num" id="gnav">–</div><div class="s" id="gnav2"></div></div>
 </div>
 
 <div class="ctrlbar" id="ctrlbar">
@@ -393,8 +414,8 @@ details summary { cursor:pointer; color:var(--mist); padding:6px 0; }
       <div class="sumgrid" id="boatSummary"></div>
       <div class="trimchart"><svg id="trimchart" viewBox="0 0 800 220" role="img" aria-label="Flap needed to trim against speed"></svg></div>
       <div style="overflow-x:auto;max-width:100%"><table class="cmp" id="cmp"></table></div>
-      <p class="note">Physics note: wings use rectangular planform NACA 0009 section polars (span, chord, aspect ratio, flap fraction, and incidence scale the model). Adding weights computes full 3D Center of Gravity (forward x, starboard y, vertical z) and 3D rotational inertias via the parallel-axis theorem; moving CG vertically updates roll/pitch inertias and is reported in the balance readout.</p>
-      <div class="row" style="display:flex;gap:8px;flex-wrap:wrap"><button id="saveBoat">Save and relaunch 3D view</button><button class="quiet" id="resetBoat">Reset to preset defaults</button><span class="note" id="boatMsg"></span></div>
+      <p class="note">Physics note: wings use rectangular planform NACA 0009 section polars (span, chord, aspect ratio, flap fraction, and incidence scale the model). The CAD boat's flaps sit next to the centreline, and their extra lift is applied there, so roll control is modelled with the real (short) lever arm. Adding weights computes full 3D Center of Gravity (forward x, starboard y, vertical z) and 3D rotational inertias via the parallel-axis theorem; moving CG vertically updates roll/pitch inertias and is reported in the balance readout.</p>
+      <div class="row" style="display:flex;gap:8px;flex-wrap:wrap"><button id="saveBoat">Save and relaunch 3D view</button><button class="quiet" id="resetBoat">Reset to preset defaults</button><button class="quiet" id="loadCadBoat" title="Switch to the CAD preset with every value exactly as measured from our SolidWorks assembly">Load our CAD values</button><span class="note" id="boatMsg"></span></div>
     </div>
   </div>
 </div></div>
@@ -430,7 +451,8 @@ details summary { cursor:pointer; color:var(--mist); padding:6px 0; }
 <script>
 const API = "http://127.0.0.1:__APIPORT__";
 const LEVERS = {
-  helm: [["height_ref", "Ride height target", "m"], ["speed_ref", "Speed target", "m/s"], ["bank_ref", "Bank", "°"]],
+  helm: [["height_ref", "Ride height target", "m"], ["speed_ref", "Speed target", "m/s"], ["bank_ref", "Bank", "°"],
+         ["main_incidence", "Main wing mounting angle", "°"]],
   sea:  [["wave_amp", "Wave amplitude", "m"], ["wave_len", "Wavelength", "m"], ["wave_dir", "Wave travel direction", "°"]],
   tune: [["gear_ratio", "Gear ratio", ":1"], ["v_bus", "Bus voltage", "V"], ["kp_heave", "Heave kp", ""], ["ki_heave", "Heave ki", ""],
          ["kd_heave", "Heave kd", ""], ["kp_pitch", "Pitch kp", ""], ["kd_pitch", "Pitch kd", ""], ["kp_roll", "Roll kp", ""], ["kd_roll", "Roll kd", ""]],
@@ -454,11 +476,11 @@ const NS = "http://www.w3.org/2000/svg";
 function node(tag, a, parent) { const e = document.createElementNS(NS, tag); for (const k in a) e.setAttribute(k, a[k]); if (parent) parent.append(e); return e; }
 function drawSide(s) {
   const svg = $("side"); svg.innerHTML = "";
-  const H = 300, W = Math.max(600, Math.round(H * svg.clientWidth / Math.max(svg.clientHeight, 1))), wl = 150, G = s.geom;
+  const H = 300, W = Math.max(520, Math.round(H * svg.clientWidth / Math.max(svg.clientHeight, 1))), wl = 152, G = s.geom;
   svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
   const L = G.hull_length, strut = G.hull_offset + G.main_pos_z;
   const spanX = Math.max(L, 2 * (Math.abs(G.elev_pos_x) + G.elev_chord));
-  const sc = Math.min(560 / (spanX + 1.0), 190 / (strut + 0.9));
+  const sc = Math.min(460 / (spanX + 1.0), 185 / (strut + 0.95));
   const bx = W * 0.5;
   const A = s.wave.amp, lam = Math.max(s.wave.len, 0.5), k = 2 * Math.PI / lam, w = Math.sqrt(9.81 * k), cd = Math.cos(s.wave.dir * Math.PI / 180);
   const eta = xw => A > 1e-4 ? A * Math.cos(k * xw * cd - w * s.t) : 0;
@@ -470,19 +492,160 @@ function drawSide(s) {
   for (let px = 0; px <= W; px += 8) { const xw = s.x + (px - bx) / sc; top += `${px ? "L" : "M"}${px} ${wl - eta(xw) * sc}`; }
   node("path", {d:top, fill:"none", stroke:css("--water-top"), "stroke-width":2}, svg);
   const ty = Math.max(16, Math.min(H - 16, wl - s.height_ref * sc));
-  node("line", {x1:40, x2:W - 40, y1:ty, y2:ty, stroke:css("--aqua"), "stroke-width":1.5, "stroke-dasharray":"6 6"}, svg);
-  const lab = node("text", {x:W - 44, y:ty < 24 ? ty + 15 : ty - 6, fill:css("--aqua"), "text-anchor":"end", "font-size":14}, svg); lab.textContent = `target ${s.height_ref.toFixed(2)} m`;
+  node("line", {x1:24, x2:W - 24, y1:ty, y2:ty, stroke:css("--aqua"), "stroke-width":1.5, "stroke-dasharray":"6 6"}, svg);
+  const lab = node("text", {x:W - 28, y:ty < 24 ? ty + 15 : ty - 6, fill:css("--aqua"), "text-anchor":"end", "font-size":13}, svg); lab.textContent = `target ${s.height_ref.toFixed(2)} m`;
   const cgy = wl - (s.height - G.hull_offset) * sc;
   const g = node("g", {transform:`translate(${bx} ${cgy}) rotate(${-s.pitch})`}, svg);
   const hb = -G.hull_offset * sc;
-  const hx0 = (G.hull_x - L / 2) * sc, hx1 = (G.hull_x + L / 2) * sc, ht = 0.22 * sc;
+  const hx0 = (G.hull_x - L / 2) * sc, hx1 = (G.hull_x + L / 2) * sc, ht = (G.hull_twin_spacing > 0 ? 0.16 : 0.22) * sc;
+  if (G.cockpit_box) {
+    const cb = G.cockpit_box;
+    const bx0 = (cb.x - cb.length / 2) * sc, bw = cb.length * sc, bh = (cb.height || 0.25) * sc;
+    const bz0 = cb.z != null ? (cb.z * sc - bh / 2) : (hb - bh);
+    node("rect", {
+      x:bx0, y:bz0, width:bw, height:bh, rx:3,
+      fill:G.cockpit_buoyancy ? "rgba(77,208,225,0.16)" : "none",
+      stroke:G.cockpit_buoyancy ? css("--aqua") : css("--mist"),
+      "stroke-width":1.2, "stroke-dasharray":G.cockpit_buoyancy ? "" : "4 3"
+    }, g);
+  }
   node("path", {d:`M${hx0} ${hb} L${hx1 - 0.18 * L * sc} ${hb} Q${hx1} ${hb} ${hx1} ${hb - ht} L${hx0} ${hb - ht} Z`,
                 fill:css("--hull"), stroke:css("--strut"), "stroke-width":1}, g);
-  for (const [px, pz, c] of [[G.main_pos_x, G.main_pos_z, G.main_chord], [G.elev_pos_x, G.elev_pos_z, G.elev_chord]]) {
-    node("line", {x1:px * sc, x2:px * sc, y1:hb, y2:pz * sc, stroke:css("--strut"), "stroke-width":Math.max(3, 0.05 * sc)}, g);
-    node("rect", {x:(px - c * 0.25) * sc, y:pz * sc - 3, width:c * sc, height:6, rx:3, fill:css("--signal")}, g);
+  if ((G.main_strut_count || 1) >= 2) {
+    node("line", {x1:G.main_pos_x * sc + 3, x2:G.main_pos_x * sc + 3, y1:hb, y2:G.main_pos_z * sc, stroke:css("--mist"), "stroke-width":Math.max(2, 0.03 * sc), opacity:0.6}, g);
   }
-  $("caption").textContent = `${s.preset} boat, ${s.mass.toFixed(0)} kg, ${A > 1e-4 ? `${(A * 100).toFixed(0)} cm waves, ${lam.toFixed(0)} m long` : "flat water"}`;
+  const incDeg = G.main_incidence_deg || 0;
+  const flapAvg = s.surfaces ? 0.5 * ((s.surfaces.left || 0) + (s.surfaces.right || 0)) : 0;
+  const elevDeg = s.surfaces ? (s.surfaces.elev || 0) : 0;
+  for (const [px, pz, c, ang, fang] of [
+    [G.main_pos_x, G.main_pos_z, G.main_chord, -incDeg, flapAvg],
+    [G.elev_pos_x, G.elev_pos_z, G.elev_chord, elevDeg, 0],
+  ]) {
+    node("line", {x1:px * sc, x2:px * sc, y1:hb, y2:pz * sc, stroke:css("--strut"), "stroke-width":Math.max(3, 0.045 * sc)}, g);
+    const fg = node("g", {transform:`translate(${px * sc} ${pz * sc}) rotate(${ang})`}, g);
+    node("rect", {x:-c * 0.25 * sc, y:-3, width:c * sc, height:6, rx:3, fill:css("--signal")}, fg);
+    if (fang) {
+      node("line", {x1:-c * 0.75 * sc, x2:-c * 0.75 * sc - Math.cos(fang * Math.PI / 180) * 10, y1:0, y2:Math.sin(fang * Math.PI / 180) * 10, stroke:css("--foam"), "stroke-width":2.5}, fg);
+    }
+  }
+  const incTag = incDeg > 0.05 ? ` · ${incDeg.toFixed(1)}° wing` : "";
+  const catTag = G.hull_twin_spacing > 0 ? (G.cockpit_buoyancy ? " · cat+box" : " · cat/box-OFF") : "";
+  $("caption").textContent = `${s.preset} (${s.mass.toFixed(0)} kg${incTag}${catTag}) · ${A > 1e-4 ? `${(A * 100).toFixed(0)} cm / ${lam.toFixed(0)} m ${s.wave.type || "regular"}` : "flat water"}`;
+}
+
+function drawTopTactical(s) {
+  const svg = $("topView"); if (!svg) return;
+  svg.innerHTML = "";
+  const W = 600, H = 320, cx = W * 0.44, cy = H * 0.54, G = s.geom;
+  const totalSpan = Math.max(2 * ((G.main_lateral_offset || 0) + (G.main_span || 0.5) / 2), (G.hull_beam || 0.3) + (G.hull_twin_spacing || 0), G.elev_span || 0.4);
+  const totalLen = Math.max(G.hull_length || 2.4, Math.abs(G.elev_pos_x || -1.2) + (G.main_pos_x || 0.5) + 0.6);
+  const sc = Math.min(210 / totalLen, 165 / totalSpan);
+  const X = x => cx + x * sc, Y = y => cy + y * sc;
+  const relDeg = s.wave.rel_dir != null ? s.wave.rel_dir : ((((s.wave.dir || 0) - (s.yaw || 0) + 540) % 360) - 180);
+
+  // Oblique wave crests in boat-relative heading frame (0 deg = following +x, 180 deg = head -x, +90 deg = port-to-stbd)
+  if ((s.wave.amp || 0) > 1e-4) {
+    const lamPx = Math.max(22, Math.min(110, (s.wave.len || 8) * sc * 0.45));
+    const om = s.wave.omega_e != null ? s.wave.omega_e : Math.sqrt(9.81 * 2 * Math.PI / Math.max(s.wave.len || 8, 0.5));
+    const phasePx = (((om * s.t) / (2 * Math.PI)) % 1 + 1) % 1 * lamPx;
+    const wg = node("g", {transform:`rotate(${relDeg} ${cx} ${cy})`, opacity:0.42}, svg);
+    for (let u = -420 + phasePx; u <= 420; u += lamPx) {
+      node("line", {x1:cx + u, x2:cx + u, y1:cy - 420, y2:cy + 420, stroke:css("--aqua"), "stroke-width":2}, wg);
+      node("line", {x1:cx + u + lamPx * 0.5, x2:cx + u + lamPx * 0.5, y1:cy - 420, y2:cy + 420, stroke:css("--water-top"), "stroke-width":0.9, "stroke-dasharray":"5 6"}, wg);
+    }
+    // Wave propagation vector arrow in top-left
+    const wx = 44, wy = 72, wr = relDeg * Math.PI / 180;
+    const tx = wx + 22 * Math.cos(wr), ty = wy + 22 * Math.sin(wr);
+    node("circle", {cx:wx, cy:wy, r:26, fill:"rgba(10,44,55,.78)", stroke:css("--rule")}, svg);
+    node("line", {x1:wx - 16 * Math.cos(wr), y1:wy - 16 * Math.sin(wr), x2:tx, y2:ty, stroke:css("--aqua"), "stroke-width":2.4}, svg);
+    node("circle", {cx:tx, cy:ty, r:3.2, fill:css("--aqua")}, svg);
+    const wl = node("text", {x:wx, y:wy + 38, fill:css("--aqua"), "text-anchor":"middle", "font-size":11}, svg);
+    wl.textContent = `wave μ ${relDeg >= 0 ? "+" : ""}${relDeg.toFixed(0)}°`;
+  }
+
+  // Turning envelope: safe R_min tangent rings & realized turn trajectory R_now
+  const V = Math.max(s.speed || 0, 0.1), te = s.turn_envelope || {};
+  const bMaxRad = Math.max(s.bank_max || 15, 2) * Math.PI / 180;
+  const Rmin = te.turn_radius_min_m || (V * V / (9.81 * Math.tan(bMaxRad)));
+  const rRad = (s.yaw_rate || 0) * Math.PI / 180;
+  const Rnow = Math.abs(rRad) > 0.008 ? V / Math.abs(rRad) : null;
+  const m2px = Math.max(1.8, Math.min(12, 92 / Math.max(Rmin, 4)));
+  const pxMin = Math.min(260, Rmin * m2px);
+  for (const sgn of [-1, 1]) {
+    node("circle", {cx, cy:cy + sgn * pxMin, r:pxMin, fill:"none", stroke:css("--rule"), "stroke-width":1.3, "stroke-dasharray":"5 5"}, svg);
+  }
+  if (Rnow !== null && Rnow < 300) {
+    const sgn = rRad > 0 ? 1 : -1;
+    const pxNow = Math.min(280, Math.max(18, Rnow * m2px));
+    const cyc = cy + sgn * pxNow, angSpan = Math.min(1.35, 88 / pxNow);
+    const xEnd = cx + pxNow * Math.sin(angSpan);
+    const yEnd = cyc - sgn * pxNow * Math.cos(angSpan);
+    const sweep = sgn > 0 ? 1 : 0;
+    node("path", {d:`M${cx} ${cy} A${pxNow} ${pxNow} 0 0 ${sweep} ${xEnd.toFixed(1)} ${yEnd.toFixed(1)}`, fill:"none", stroke:css("--signal"), "stroke-width":2.6, opacity:0.95}, svg);
+  }
+  // Sideslip vector arrow from CG
+  const betaRad = (s.sideslip || 0) * Math.PI / 180;
+  if (s.speed > 0.5) {
+    const vx = cx + 46 * Math.cos(betaRad), vy = cy + 46 * Math.sin(betaRad);
+    node("line", {x1:cx, y1:cy, x2:vx, y2:vy, stroke:css("--foam"), "stroke-width":1.8, "stroke-dasharray":"3 3"}, svg);
+  }
+
+  // Boat planform (bow points right +x, starboard down +y)
+  const x0 = G.hull_x - G.hull_length / 2, x1 = G.hull_x + G.hull_length / 2, hb = (G.hull_beam || 0.3) / 2, tw = +(G.hull_twin_spacing || 0);
+  if (tw > 0) {
+    for (const yc of [-tw / 2, tw / 2]) {
+      node("rect", {x:X(x0), y:Y(yc - hb), width:(x1 - x0) * sc, height:2 * hb * sc, rx:hb * sc, fill:css("--trench"), stroke:css("--strut"), "stroke-width":1.4}, svg);
+    }
+  } else {
+    node("path", {d:`M${X(x0)} ${Y(-hb)} L${X(x1 - 0.25 * G.hull_length)} ${Y(-hb)} L${X(x1)} ${Y(0)} L${X(x1 - 0.25 * G.hull_length)} ${Y(hb)} L${X(x0)} ${Y(hb)} Z`, fill:css("--trench"), stroke:css("--strut"), "stroke-width":1.4}, svg);
+  }
+  if (G.cockpit_box) {
+    const cb = G.cockpit_box;
+    const cbBeam = cb.beam != null ? cb.beam : (cb.width || 0.8);
+    node("rect", {
+      x:X(cb.x - cb.length / 2), y:Y((cb.y || 0) - cbBeam / 2),
+      width:cb.length * sc, height:cbBeam * sc, rx:3,
+      fill:G.cockpit_buoyancy ? "rgba(77,208,225,0.12)" : "none",
+      stroke:G.cockpit_buoyancy ? css("--aqua") : css("--mist"),
+      "stroke-width":1.1, "stroke-dasharray":G.cockpit_buoyancy ? "" : "4 3"
+    }, svg);
+  }
+  const flapCol = ang => Math.abs(ang) < 0.3 ? css("--signal") : (ang > 0 ? css("--aqua") : css("--flag"));
+  const sf = s.surfaces || {left:0, right:0, elev:0};
+  const wings = [
+    ["L", -(G.main_lateral_offset || 0), sf.left || 0],
+    ["R", +(G.main_lateral_offset || 0), sf.right || 0],
+  ];
+  for (const [side, yc, ang] of wings) {
+    const fy = Y(yc - (G.main_span || 0.5) / 2), fw = (G.main_chord || 0.16) * sc, fh = (G.main_span || 0.5) * sc;
+    node("rect", {x:X(G.main_pos_x - (G.main_chord || 0.16) * 0.5), y:fy, width:fw, height:fh, rx:2, fill:css("--signal"), opacity:0.85}, svg);
+    const fFrac = G.main_flap_span_frac != null ? G.main_flap_span_frac : 1.0;
+    const flY = G.main_flap_center_y != null ? (side === "L" ? -G.main_flap_center_y : G.main_flap_center_y) : yc;
+    const flH = (G.main_span || 0.5) * fFrac * sc;
+    node("rect", {x:X(G.main_pos_x - (G.main_chord || 0.16) * 0.5), y:Y(flY) - flH / 2, width:Math.max(4, fw * 0.42), height:flH, rx:1.5, fill:flapCol(ang)}, svg);
+    const lt = node("text", {x:X(G.main_pos_x) + 10, y:side === "L" ? Y(yc - (G.main_span || 0.5) / 2) - 5 : Y(yc + (G.main_span || 0.5) / 2) + 13, fill:css("--spray"), "font-size":11}, svg);
+    lt.textContent = `${side} ${ang >= 0 ? "+" : ""}${ang.toFixed(1)}°`;
+  }
+  if ((G.main_strut_count || 1) >= 2 && (G.main_strut_y || 0) > 0) {
+    for (const sy of [-G.main_strut_y, G.main_strut_y]) {
+      node("circle", {cx:X(G.main_pos_x), cy:Y(sy), r:3.2, fill:css("--foam"), stroke:css("--deep")}, svg);
+    }
+  }
+  node("rect", {x:X(G.elev_pos_x - (G.elev_chord || 0.1) * 0.5), y:Y(-(G.elev_span || 0.4) / 2), width:(G.elev_chord || 0.1) * sc, height:(G.elev_span || 0.4) * sc, rx:2, fill:flapCol(sf.elev || 0), opacity:0.9}, svg);
+  node("circle", {cx, cy, r:4, fill:css("--flag"), stroke:css("--foam"), "stroke-width":1}, svg);
+
+  // Heading compass rose in top-right
+  const rx = W - 46, ry = 54, psiRad = ((s.yaw || 0) - 90) * Math.PI / 180;
+  node("circle", {cx:rx, cy:ry, r:24, fill:"rgba(10,44,55,.82)", stroke:css("--rule")}, svg);
+  const nt = node("text", {x:rx, y:ry - 14, fill:css("--mist"), "text-anchor":"middle", "font-size":9.5}, svg); nt.textContent = "N";
+  node("line", {x1:rx - 9 * Math.cos(psiRad), y1:ry - 9 * Math.sin(psiRad), x2:rx + 14 * Math.cos(psiRad), y2:ry + 14 * Math.sin(psiRad), stroke:css("--signal"), "stroke-width":2.2}, svg);
+  const pt = node("text", {x:rx, y:ry + 36, fill:css("--spray"), "text-anchor":"middle", "font-size":11}, svg); pt.textContent = `ψ ${(((s.yaw || 0) % 360 + 360) % 360).toFixed(0)}°`;
+
+  const wReg = s.wave.regime || "calm";
+  $("topMeta").textContent = (s.wave.amp || 0) > 1e-4
+    ? `${wReg} sea (μ ${relDeg >= 0 ? "+" : ""}${relDeg.toFixed(0)}°, Te ${(s.wave.period_e || 0).toFixed(1)}s)`
+    : `Calm water · Turn r ${(s.yaw_rate || 0) >= 0 ? "+" : ""}${(s.yaw_rate || 0).toFixed(1)}°/s`;
+  $("topCap").textContent = `R_min ${Rmin.toFixed(1)} m (R_now ${Rnow !== null && Rnow < 999 ? Rnow.toFixed(1) + " m" : "straight"}) · β ${(s.sideslip || 0).toFixed(1)}° · L ${(sf.left || 0).toFixed(1)}° / R ${(sf.right || 0).toFixed(1)}° / E ${(sf.elev || 0).toFixed(1)}°`;
 }
 
 // ---------- heel dial
@@ -779,13 +942,26 @@ async function poll() {
     const lvl = renderObserver(s);
     hist.push({t:s.t, height:s.height, height_ref:s.height_ref, roll:s.roll, pitch:s.pitch, sl:s.surfaces.left, sr:s.surfaces.right, se:s.surfaces.elev, lvl:LV[lvl]});
     while (hist.length && hist[0].t < s.t - 21) hist.shift();
-    live(true); if (currentTab === "fly") { drawSide(s); drawHeel(s.roll, s.bank_ref); drawTurnEnvelope(s); renderFlightSystems(s); drawTraces(); } syncLevers(s.sliders);
+    live(true); if (currentTab === "fly") { drawSide(s); drawTopTactical(s); drawHeel(s.roll, s.bank_ref); drawTurnEnvelope(s); renderFlightSystems(s); drawTraces(); } syncLevers(s.sliders);
     render(s); renderCtrlBar(s);
     $("gh").innerHTML = `${s.height.toFixed(2)}<small>m</small>`; $("gh2").textContent = `target ${s.height_ref.toFixed(2)} m`;
     $("gr").innerHTML = `${s.roll.toFixed(1)}° <small>/ ${s.pitch.toFixed(1)}°</small>`; $("gr2").textContent = `bank target ${s.bank_ref.toFixed(0)}° (safe max ±${(s.bank_max ?? 15).toFixed(1)}°)`;
     $("gt").innerHTML = `${s.thrust.toFixed(0)}<small>N</small>`;
     const ok = s.limits === "within limits";
-    $("gt2").innerHTML = `${(s.thrust * s.speed / 1000).toFixed(2)} kW at the prop, ${ok ? "drives within limits" : `<span class="warn">${s.limits}</span>`}`;
+    const pKw = s.power_kw != null ? s.power_kw : (s.thrust * s.speed / 1000);
+    $("gt2").innerHTML = `${pKw.toFixed(2)} kW at the prop, ${ok ? "drives within limits" : `<span class="warn">${s.limits}</span>`}`;
+    const hc = s.foil_depth_hc;
+    $("gd").innerHTML = hc != null ? `${hc.toFixed(2)}<small>c</small>` : "–";
+    $("gd2").innerHTML = hc != null ? (hc < 0.8 ? `<span class="warn">shallow ventilation risk</span>` : `wing ${(s.geom.main_incidence_deg || 0).toFixed(1)}° · surface loss modeled`) : "";
+    const sig = s.cavitation_sigma, cp = s.cp_min_max || 0;
+    $("gcav").innerHTML = sig != null && sig < 90 ? `${sig.toFixed(2)}<small>${cp > 0 ? `/ ${cp.toFixed(2)}` : ""}</small>` : "safe";
+    $("gcav2").innerHTML = sig != null && sig < 90 ? (cp >= sig ? `<span class="warn">cavitating (${cp.toFixed(2)} ≥ ${sig.toFixed(2)})</span>` : (cp > 0.8 * sig ? `near inception (margin ${(sig - cp).toFixed(2)})` : `sub-cavitating margin ${(sig - cp).toFixed(2)}`)) : "low speed";
+    const wv = s.wave || {};
+    $("gwav").innerHTML = (wv.amp || 0) > 1e-4 ? `${(wv.period_e || 0).toFixed(1)}<small>s</small>` : "calm";
+    $("gwav2").textContent = (wv.amp || 0) > 1e-4 ? `${wv.regime || "oblique"} · μ ${(wv.rel_dir || 0) >= 0 ? "+" : ""}${(wv.rel_dir || 0).toFixed(0)}° · ωe ${(wv.omega_e || 0).toFixed(2)} rad/s` : `ωe ${((wv.omega_e || 0)).toFixed(2)} rad/s`;
+    const yNorm = (((s.yaw || 0) % 360) + 360) % 360;
+    $("gnav").innerHTML = `${yNorm.toFixed(0)}° <small>/ ${(s.sideslip || 0).toFixed(1)}°</small>`;
+    $("gnav2").textContent = `yaw rate ${(s.yaw_rate || 0) >= 0 ? "+" : ""}${(s.yaw_rate || 0).toFixed(1)}°/s${s.yaw_rate_cmd != null ? ` (cmd ${s.yaw_rate_cmd.toFixed(1)})` : ""}`;
     $("state").innerHTML = `Viewer running, <b>${s.mode.toLowerCase()}</b> on ${s.controller} with ${s.sensors} sensors`;
     $("clock").textContent = `${s.t.toFixed(1)} s`;
     setTimeout(poll, 100); return;
@@ -800,7 +976,7 @@ document.querySelectorAll(".tabs button[data-tab]").forEach(b => b.onclick = () 
   for (const t of ["fly", "boat", "tune"]) $("tab-" + t).hidden = t !== currentTab;
   if (currentTab === "boat") loadBoat();
   if (currentTab === "tune") pollTune(true);
-  if (currentTab === "fly" && last) { drawSide(last); drawTurnEnvelope(last); renderFlightSystems(last); drawTraces(); }
+  if (currentTab === "fly" && last) { drawSide(last); drawTopTactical(last); drawTurnEnvelope(last); renderFlightSystems(last); drawTraces(); }
 });
 
 // ---------- observer
@@ -822,7 +998,7 @@ const EDIT = [
   ["Front Main Wing (Split Left & Right Flaps)", "Provides almost all lift and tilts left/right with split flaps to bank the boat into turns.",
    [["main_chord", "Chord (width front-to-back)", "m", 0.01, "Wider blade = more lift at lower speed, higher flap torque."],
     ["main_span", "Half-span (each side wing)", "m", 0.05, "Longer wings glide more smoothly, but tips reach closer to the water surface in steep turns."],
-    ["main_incidence_deg", "Fixed mounting angle", "°", 0.25, "Set so flaps stay near 0° at cruise for maximum wave headroom."],
+    ["main_incidence_deg", "Fixed mounting angle (0–5°)", "°", 0.25, "How far the whole front wing is tilted nose-up on its mounts. Our CAD wing is at 0°; more angle = more lift at low speed and less flap needed."],
     ["main_flap_frac", "Movable flap fraction", "", 0.05, "Share of wing chord that hinges (0.25 = 25% flap)."]]],
   ["Back Wing / Elevator (One Piece — Pitch Only)", "Balances pitch (nose up/down). Has no split roll/yaw flaps — keep arm long enough for gentle, stable pitch.",
    [["elev_chord", "Chord", "m", 0.01, "Depth of rear stabilizer blade."],
@@ -835,7 +1011,7 @@ const EDIT = [
     ["target_speed", "Cruise speed", "spd", 0.25, "Steady speed the boat holds on autopilot while flying."],
     ["max_thrust", "Max motor thrust limit", "N", 10, "Must comfortably exceed displacement hump drag or the boat stays on the water."]]],
 ];
-const selPreset = () => (document.querySelector("select[name=preset]") || {}).value || "manned";
+const selPreset = () => (document.querySelector("select[name=preset]") || {}).value || "cad";
 const presetSel = document.querySelector("select[name=preset]");
 if (presetSel) presetSel.addEventListener("change", () => { if (currentTab === "boat") loadBoat(); if (currentTab === "tune") pollTune(true); });
 
@@ -859,10 +1035,12 @@ function buildFields() {
       const d = document.createElement("label"); d.className = "fld" + (k in edits ? " changed" : "");
       d.innerHTML = `<span>${label}${dispUnit ? ` (${dispUnit})` : ""}</span>`;
       const inp = Object.assign(document.createElement("input"), {type:"number", step:dispStep, value:+(+dispVal).toFixed(3)});
+      if (k === "main_incidence_deg") { inp.min = 0; inp.max = 5; }
       inp.oninput = () => {
         const raw = parseFloat(inp.value);
         if (!isFinite(raw)) return;
-        const x = u === "spd" ? toSI(raw) : raw;
+        let x = u === "spd" ? toSI(raw) : raw;
+        if (k === "main_incidence_deg") x = Math.min(5, Math.max(0, x));
         if (Math.abs(x - boat.base[k]) < 1e-6) delete edits[k]; else edits[k] = x;
         d.classList.toggle("changed", k in edits); schedulePreview();
       };
@@ -870,6 +1048,25 @@ function buildFields() {
       d.append(inp, sm); fs.append(d);
     }
     root.append(fs);
+  }
+  if (boat.preset === "cad") {
+    const fsCat = root.lastElementChild;
+    const d = document.createElement("label");
+    d.className = "fld" + ("cockpit_buoyancy" in edits ? " changed" : "");
+    d.innerHTML = `<span>Cockpit box buoyancy</span>`;
+    const cb = Object.assign(document.createElement("input"), {
+      type: "checkbox",
+      checked: ("cockpit_buoyancy" in edits ? edits.cockpit_buoyancy : boat.base.cockpit_buoyancy) !== false,
+    });
+    cb.onchange = () => {
+      const baseOn = boat.base.cockpit_buoyancy !== false;
+      if (cb.checked === baseOn) delete edits.cockpit_buoyancy; else edits.cockpit_buoyancy = cb.checked;
+      d.classList.toggle("changed", "cockpit_buoyancy" in edits);
+      schedulePreview();
+    };
+    const sm = document.createElement("small");
+    sm.textContent = "Unchecked = cockpit box omitted from buoyancy & drag; pontoons scaled for reserve displacement.";
+    d.append(cb, sm); fsCat.append(d);
   }
   const fs = document.createElement("fieldset");
   fs.innerHTML = `<legend>Placed Weights (Auto-Calculates 3D Center of Gravity &amp; Inertia)</legend>`
@@ -889,10 +1086,10 @@ function buildFields() {
   drawTable();
   const qadd = document.createElement("div"); qadd.className = "quickadd";
   const addItem = (name, mass, x, y, z) => { payloads.push({name, mass, x, y, z}); drawTable(); if (lastPreview) drawPlan(lastPreview); schedulePreview(); };
-  [["+ Rider", boat.preset === "manned" ? 75 : 5, -0.43, 0, 0.33],
-   ["+ Battery", boat.preset === "manned" ? 25 : 2.5, 0.35, 0, 0.10],
-   ["+ Motor/Gear", boat.preset === "manned" ? 12 : 1.5, -0.80, 0, -0.20],
-   ["+ Custom", boat.preset === "manned" ? 10 : 1, 0, 0, 0]
+  [["+ Rider", boat.preset !== "model" ? 75 : 5, -0.43, 0, 0.33],
+   ["+ Battery", boat.preset !== "model" ? 25 : 2.5, 0.35, 0, 0.10],
+   ["+ Motor/Gear", boat.preset !== "model" ? 12 : 1.5, -0.80, 0, -0.20],
+   ["+ Custom", boat.preset !== "model" ? 10 : 1, 0, 0, 0]
   ].forEach(([lbl, m, x, y, z]) => {
     const btn = Object.assign(document.createElement("button"), {className:"quiet small", type:"button", textContent:lbl});
     btn.onclick = () => addItem(lbl.replace("+ ", ""), m, x, y, z);
@@ -929,11 +1126,16 @@ function drawPlan(r) {
   const maxPx = payloads.reduce((a, q) => Math.max(a, Math.abs(+q.x || 0) + 0.3), 0);
   const maxPy = payloads.reduce((a, q) => Math.max(a, Math.abs(+q.y || 0) + 0.3), 0);
   const L = Math.max(g0.hull_length, 2.6 - g1.elev_pos_x, g1.hull_length, 2 * maxPx) + 0.6;
-  const span = Math.max(2 * (g1.main_lateral_offset + g1.main_span / 2), g0.hull_beam, 2 * maxPy) + 0.4;
+  const span = Math.max(2 * (g1.main_lateral_offset + g1.main_span / 2), g0.hull_beam + (+g0.hull_twin_spacing || 0), 2 * maxPy) + 0.4;
   const sc = Math.min((W - 80) / L, (H - 56) / span), cx = W / 2 + 0.12 * sc * L / 2, cy = H / 2;
   const X = x => cx + x * sc, Y = y => cy + y * sc;
   planMap = {svg, cx, cy, sc};
   const hull = (g, st) => { const x0 = g.hull_x - g.hull_length / 2, x1 = g.hull_x + g.hull_length / 2, b = g.hull_beam / 2;
+    const tw = +(g.hull_twin_spacing || 0);
+    if (tw > 0) {   // catamaran: two pontoons
+      for (const yc of [-tw / 2, tw / 2]) node("rect", {x:X(x0), y:Y(yc - b), width:(x1 - x0) * sc, height:2 * b * sc, rx:b * sc, ...st}, svg);
+      return;
+    }
     node("path", {d:`M${X(x0)} ${Y(-b)} L${X(x1 - 0.25 * g.hull_length)} ${Y(-b)} L${X(x1)} ${Y(0)} L${X(x1 - 0.25 * g.hull_length)} ${Y(b)} L${X(x0)} ${Y(b)} Z`, ...st}, svg); };
   const foils = (g, st) => {
     for (const sgn of [-1, 1]) { const yc = sgn * g.main_lateral_offset;
@@ -942,9 +1144,21 @@ function drawPlan(r) {
   };
   hull(g0, {fill:"none", stroke:css("--rule"), "stroke-dasharray":"5 5"});
   hull(g1, {fill:css("--trench"), stroke:css("--strut")});
+  if (g1.cockpit_box) {
+    const cb = g1.cockpit_box;
+    const cbBeam = cb.beam != null ? cb.beam : (cb.width || 0.8);
+    node("rect", {
+      x:X(cb.x - cb.length / 2), y:Y((cb.y || 0) - cbBeam / 2),
+      width:cb.length * sc, height:cbBeam * sc, rx:3,
+      fill:g1.cockpit_buoyancy ? "rgba(77,208,225,0.12)" : "none",
+      stroke:g1.cockpit_buoyancy ? css("--aqua") : css("--mist"),
+      "stroke-width":1.1, "stroke-dasharray":g1.cockpit_buoyancy ? "" : "4 3"
+    }, svg);
+  }
   node("line", {x1:20, x2:W - 20, y1:cy, y2:cy, stroke:css("--rule"), "stroke-dasharray":"2 6"}, svg);
   foils(g1, {fill:css("--signal"), opacity:0.9});
-  const base = {...g1, main_chord:boat.base.main_chord, main_span:boat.base.main_span, main_lateral_offset:0.05 + boat.base.main_span / 2,
+  const base = {...g1, main_chord:boat.base.main_chord, main_span:boat.base.main_span,
+                main_lateral_offset:g0.main_lateral_offset != null ? g0.main_lateral_offset : (0.05 + boat.base.main_span / 2),
                 elev_chord:boat.base.elev_chord, elev_span:boat.base.elev_span, elev_pos_x:boat.base.elev_pos_x};
   foils(base, {fill:"none", stroke:css("--aqua"), "stroke-dasharray":"4 4"});
   payloads.forEach((q, idx) => {
@@ -993,15 +1207,16 @@ function drawSummary(r) {
 }
 function drawTrim(r) {
   const svg = $("trimchart"); svg.innerHTML = "";
-  const W = 800, H = 220, L = 46, R = 36, T = 12, B = 30, v0 = 3, v1 = 12;
+  const okV = [...r.base.curve, ...r.edited.curve].filter(c => c.flap != null && Math.abs(c.flap) <= 25).map(c => c.speed);
+  const W = 800, H = 220, L = 46, R = 36, T = 12, B = 30, v0 = 3, v1 = Math.max(12, Math.min(16, Math.ceil(Math.max(...okV, 12))));
   const X = v => L + (v - v0) / (v1 - v0) * (W - L - R), Y = f => T + (25 - f) / 50 * (H - T - B);
   node("rect", {x:L, y:Y(15), width:W - L - R, height:Y(-15) - Y(15), fill:css("--deep")}, svg);
   for (const f of [-20, -10, 0, 10, 20]) { node("line", {x1:L, x2:W - R, y1:Y(f), y2:Y(f), stroke:css("--rule")}, svg);
     const t = node("text", {x:4, y:Y(f) + 4, fill:css("--mist"), "font-size":12}, svg); t.textContent = `${f}°`; }
-  for (let v = 4; v <= 12; v += 2) { const t = node("text", {x:X(v), y:H - 8, "text-anchor":v === 12 ? "end" : "middle", fill:css("--mist"), "font-size":12}, svg);
+  for (let v = 4; v <= v1; v += 2) { const t = node("text", {x:X(v), y:H - 8, "text-anchor":v + 2 > v1 ? "end" : "middle", fill:css("--mist"), "font-size":12}, svg);
     t.textContent = `${spd(v).toFixed(unit === "m/s" ? 0 : 1)} ${unit}`; }
   const line = (curve, col, dash) => { let d = "", pen = false;
-    for (const c of curve) { if (c.flap == null || Math.abs(c.flap) > 25) { pen = false; continue; } d += `${pen ? "L" : "M"}${X(c.speed)} ${Y(c.flap)}`; pen = true; }
+    for (const c of curve) { if (c.flap == null || Math.abs(c.flap) > 25 || c.speed > v1) { pen = false; continue; } d += `${pen ? "L" : "M"}${X(c.speed)} ${Y(c.flap)}`; pen = true; }
     node("path", {d, fill:"none", stroke:col, "stroke-width":2.5, "stroke-dasharray":dash || ""}, svg); };
   line(r.base.curve, css("--aqua"), "6 5"); line(r.edited.curve, css("--signal"));
   const vx = Math.max(L, Math.min(W - R, X(r.edited.cruise_speed)));
@@ -1043,6 +1258,27 @@ $("saveBoat").onclick = async () => {
   await fetch("/api/relaunch", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({preset:boat.preset})});
   $("boatMsg").textContent = "Saved to local overrides. Relaunching the 3D viewer (LQR gains recalculate for a few seconds).";
 };
+function sessionFormData() {
+  const formEl = $("session"), f = {};
+  if (!formEl) return f;
+  for (const el of formEl.querySelectorAll("select[name], input[name]")) {
+    if (el.type === "checkbox") { if (el.checked) f[el.name] = el.value || "1"; }
+    else f[el.name] = el.value;
+  }
+  f.preset = "cad";
+  return f;
+}
+async function loadCadBoat(msgId) {
+  if (msgId) $(msgId).textContent = "Loading the CAD boat and relaunching the 3D view…";
+  const r = await (await fetch("/api/load_cad", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({form:sessionFormData()})})).json();
+  if (r.error) { if (msgId) $(msgId).textContent = r.error; return; }
+  const sel = document.querySelector("select[name=preset]"); if (sel) sel.value = "cad";
+  built = false;
+  if (currentTab === "boat") loadBoat();
+  if (msgId) $(msgId).textContent = "CAD boat loaded (all saved edits for it cleared). The 3D view is relaunching.";
+}
+$("loadCad").onclick = () => loadCadBoat(null);
+$("loadCadBoat").onclick = () => loadCadBoat("boatMsg");
 $("resetBoat").onclick = async () => {
   await fetch("/api/design/save", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({preset:boat.preset, reset:true})});
   loadBoat();
@@ -1167,7 +1403,7 @@ $("tuneClear").onclick = async () => {
   $("tuneMsg").textContent = "Cleared saved tuned gains; preset defaults are active again.";
   pollTune(true);
 };
-addEventListener("resize", () => { if (last && currentTab === "fly") { drawSide(last); drawTurnEnvelope(last); drawTraces(); } });
+addEventListener("resize", () => { if (last && currentTab === "fly") { drawSide(last); drawTopTactical(last); drawTurnEnvelope(last); drawTraces(); } });
 poll();
 pollTune(false);
 $("units").textContent = unit;

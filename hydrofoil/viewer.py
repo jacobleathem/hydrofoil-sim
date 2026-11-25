@@ -59,17 +59,17 @@ import numpy as np
 import mujoco
 import mujoco.viewer
 
-from hydrofoil.params import DEFAULT_PARAMS, MANNED_PARAMS
+from hydrofoil.params import PRESETS, preset_params
 from hydrofoil.vehicle import VehiclePhysics
 from hydrofoil.dynamics.kinematics import R_body_to_ned
-from hydrofoil.waves.airy import AiryWave, CalmWater, IrregularWave
+from hydrofoil.waves.airy import AiryWave, CalmWater, IrregularWave, encounter_frequency
 from hydrofoil.actuation.drive import DriveSpec, electrical_demand
 from hydrofoil.actuation.loads import DRIVES, surface_models, drive_angles, steady_moments
 
 # Pilot limits -- keep identical to the verified/capped ranges used elsewhere.
 DASHBOARD_URL = "http://127.0.0.1:8765"
 HEIGHT_MIN, HEIGHT_MAX, HEIGHT_STEP = -0.3, 1.0, 0.02   # m, per key event
-SPEED_MIN, SPEED_MAX, SPEED_STEP = 0.0, 10.0, 0.25       # m/s, per key event
+SPEED_MIN, SPEED_MAX, SPEED_STEP = 0.0, 16.0, 0.25       # m/s, per key event (the CAD boat at 0 deg needs ~15 m/s)
 BANK_MIN, BANK_MAX, BANK_STEP = -15.0, 15.0, 1.0         # deg, per key event (supervisor enforces dynamic safe_bank_limit)
 BANK_RETURN_RATE = 10.0                                   # deg/s spring-back
 
@@ -90,6 +90,7 @@ SLIDERS = [
     ("kd_roll", "kd_roll", 0.0, 1.0),
     ("gear_ratio", "gear_ratio", 5.0, 50.0),
     ("v_bus", "v_bus", 10.0, 44.0),
+    ("main_incidence", "main_incidence_deg", 0.0, 5.0),   # main wing mounting angle [deg], live (docs/26)
 ]
 IDX = {name: i for i, (name, *_rest) in enumerate(SLIDERS)}
 
@@ -120,6 +121,10 @@ def build_mjcf(p: dict) -> str:
     flap_frac = p.get("main_flap_frac", 0.4)
 
     fs = ms * p.get("main_flap_span_frac", 1.0)      # flap span (inboard part of each half)
+    cad = None
+    if p.get("visual") == "cad":
+        from hydrofoil.cad_geometry import cad_parts
+        cad = cad_parts(p)
 
     def half(name, y):
         # y is the half's centre (MuJoCo y = left); the flap sits on the INBOARD side (toward y = 0)
@@ -127,7 +132,7 @@ def build_mjcf(p: dict) -> str:
         fy = inboard * (ms - fs) / 2                   # flap centre relative to the half's centre
         oy = -inboard * fs / 2                         # fixed trailing-edge strip on the outboard part
         return f"""
-        <body name="{name}" pos="{mx} {y} {-mz}">
+        <body name="{name}" pos="0 {y} 0">
           <geom type="box" size="{mc*(1-flap_frac)/2} {ms/2} 0.008" pos="{mc*flap_frac/2} 0 0" material="foil"/>
           <geom type="box" size="{mc*flap_frac/2} {(ms-fs)/2 + 1e-4} 0.008" pos="{-mc*(1-flap_frac)/2} {oy} 0" material="foil"/>
           <body name="{name}_flap" pos="{-mc*(1-flap_frac)/2 + mc*flap_frac/2} {fy} 0">
@@ -160,7 +165,7 @@ def build_mjcf(p: dict) -> str:
         struts += f"""
       <geom name="elev_bracket" type="box" size="{(transom - ex) / 2 + ec_s / 2} {0.08 * B} 0.03" pos="{(transom + ex) / 2} 0 {hull_off + 0.03}" material="strut"/>"""
     rider_p = next((q for q in p.get("default_payloads", []) if str(q.get("name", "")).lower() == "rider"), None)
-    deck = hull_off + D
+    deck = hull_off + D if cad is None else cad["deck"]
     rider = ""
     if p["mass"] > 100.0 or rider_p is not None:         # seated rider positioned at Rider payload (x fwd, y_mj = -y stbd)
         rx = float(rider_p["x"]) if rider_p is not None else p["hull_x"] - 0.12 * L
@@ -181,6 +186,16 @@ def build_mjcf(p: dict) -> str:
         sz = float(np.clip(0.03 + 0.008 * np.sqrt(max(float(q.get("mass", 1.0)), 0.1)), 0.025, 0.12))
         qx, qy = float(q.get("x", 0.0)), -float(q.get("y", 0.0))
         extra_loads += f'\n      <geom name="payload_{i}" type="box" size="{sz:.3f} {sz:.3f} {0.6 * sz:.3f}" pos="{qx:.3f} {qy:.3f} {deck + 0.6 * sz:.3f}" material="flap" contype="0" conaffinity="0"/>'
+    if cad is not None:
+        hull_xml = cad["geoms"]
+        struts = ""
+        wing_xml = cad["wing"]
+        elev_xml = cad["elev"]
+    else:
+        hull_xml = (f'<geom name="hull" type="mesh" mesh="hull" pos="{p["hull_x"]} 0 {hull_off}" material="hull" contype="0" conaffinity="0"/>\n'
+                    f'      <geom name="cockpit" type="box" size="{0.22 * L} {0.36 * B} 0.006" pos="{p["hull_x"] - 0.08 * L} 0 {hull_off + D}" material="deck" contype="0" conaffinity="0"/>')
+        wing_xml = half("left_foil", lat) + half("right_foil", -lat)
+        elev_xml = f'<geom type="box" size="{ec/2} {es/2} 0.006" material="foil"/>'
     cg_off = p.get("cg_offset", (0.0, 0.0))
     if abs(float(cg_off[0])) > 1e-4 or abs(float(cg_off[1])) > 1e-4 or p.get("default_payloads"):
         extra_loads += f'\n      <geom name="cg_deck_dot" type="sphere" size="0.03" pos="{float(cg_off[0]):.3f} {-float(cg_off[1]):.3f} {deck + 0.025:.3f}" material="foil" contype="0" conaffinity="0"/>'
@@ -207,6 +222,9 @@ def build_mjcf(p: dict) -> str:
     <material name="foil" rgba="0.95 0.76 0.19 1" specular="0.5"/>
     <material name="flap" rgba="0.36 0.81 0.76 1" specular="0.5"/>
     <material name="water" rgba="0.09 0.36 0.44 0.42" specular="0.7" shininess="0.9"/>
+    <material name="prop" rgba="0.15 0.17 0.19 0.55"/>
+    <material name="deck_dry" rgba="0.06 0.23 0.28 0.35"/>
+    {cad["assets"] if cad else ""}
     <hfield name="water" nrow="{WATER_N}" ncol="{WATER_N}" size="{WATER_HALF} {WATER_HALF} {2 * WATER_RANGE} 0.02"/>
   </asset>
   <worldbody>
@@ -218,14 +236,15 @@ def build_mjcf(p: dict) -> str:
     </body>
     <body name="vehicle" pos="0 0 0">
       <freejoint name="root"/>
-      <geom name="hull" type="mesh" mesh="hull" pos="{p["hull_x"]} 0 {hull_off}" material="hull" contype="0" conaffinity="0"/>
-      <geom name="cockpit" type="box" size="{0.22 * L} {0.36 * B} 0.006" pos="{p["hull_x"] - 0.08 * L} 0 {hull_off + D}" material="deck" contype="0" conaffinity="0"/>{rider}{extra_loads}
+      {hull_xml}{rider}{extra_loads}
       {struts}
-      {half("left_foil", lat)}
-      {half("right_foil", -lat)}
+      <body name="main_wing" pos="{mx} 0 {-mz}">
+        <joint name="main_mount" type="hinge" axis="0 1 0" limited="true" range="-30 30"/>
+        {wing_xml}
+      </body>
       <body name="elevator" pos="{ex} 0 {-ez}">
         <joint name="elev_hinge" type="hinge" axis="0 1 0" limited="true" range="-60 60"/>
-        <geom type="box" size="{ec/2} {es/2} 0.006" material="foil"/>
+        {elev_xml}
       </body>
     </body>
   </worldbody>
@@ -239,12 +258,14 @@ class MujocoPose:
     """Maps a sim state + flap commands onto the MuJoCo model's qpos."""
 
     def __init__(self, params: dict):
+        self.params = params                              # live dict: the mounting angle can change in flight
         self.model = mujoco.MjModel.from_xml_string(build_mjcf(params))
         self.data = mujoco.MjData(self.model)
         m = self.model
         self.vehicle_id = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, "vehicle")
         j = lambda n: m.jnt_qposadr[mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_JOINT, n)]
         self.q_left, self.q_right, self.q_elev = j("left_foil_hinge"), j("right_foil_hinge"), j("elev_hinge")
+        self.q_mount = j("main_mount")
         self.water_mocap = m.body_mocapid[mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, "water")]
         self.hfield_id = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_HFIELD, "water")
         g = np.linspace(-WATER_HALF, WATER_HALF, WATER_N)
@@ -265,6 +286,7 @@ class MujocoPose:
         d.qpos[self.q_left] = -np.radians(ang["left"])
         d.qpos[self.q_right] = -np.radians(ang["right"])
         d.qpos[self.q_elev] = -np.radians(ang["elev"])
+        d.qpos[self.q_mount] = -np.radians(float(self.params.get("main_incidence_deg", 0.0)))   # + = leading edge up
         mujoco.mj_forward(self.model, d)
 
     def water(self, state, wave, t: float) -> bool:
@@ -829,12 +851,16 @@ def _ensure_dashboard(api_port: int = 8766, port: int = 8765, open_browser: bool
 
 
 def run(speed: float = 1.0, wave_cfg: dict | None = None, duration: float = 600.0,
-        controller: str | None = None, sensors: str | None = None, preset: str = "model", api_port: int = 8766, maximize: bool = True,
+        controller: str | None = None, sensors: str | None = None, preset: str = "cad", api_port: int = 8766, maximize: bool = True,
         overrides: dict | None = None, supervisor: bool = False,
-        safety_margin: str | None = None, allocator: str | None = None, wave_type: str | None = None):
+        safety_margin: str | None = None, allocator: str | None = None, wave_type: str | None = None,
+        cockpit_buoyancy: bool | None = None):
     from hydrofoil.design import apply_design
     from hydrofoil.monitor import FlightMonitor
-    params = apply_design(dict(MANNED_PARAMS if preset == "manned" else DEFAULT_PARAMS), overrides or {})
+    ov_in = dict(overrides or {})
+    if cockpit_buoyancy is not None:
+        ov_in["cockpit_buoyancy"] = bool(cockpit_buoyancy)
+    params = apply_design(preset_params(preset), ov_in)
     params.setdefault("v_bus", DriveSpec().ctrl.v_bus)
     if controller:
         params["controller"] = controller
@@ -879,7 +905,30 @@ def run(speed: float = 1.0, wave_cfg: dict | None = None, duration: float = 600.
     last_bank_written = ctrl[IDX["bank_ref"]]
 
     size = max(params["hull_length"], 2 * params["main_lateral_offset"] + params["main_span"])
+
+    # Main wing mounting angle, live from the slider (docs/26). The physics changes at once; the trim feed-forward,
+    # LQR gains, and Kalman estimator depend on it, so they are re-derived in the background ~0.6 s after the slider stops,
+    # with the PID loops flying meanwhile.
+    inc_applied = float(params.get("main_incidence_deg", 0.0))
+    inc_changed_at = None
+    inc_job = {"gen": 0, "result": None}
+
+    def _rebuild_for_incidence(inc: float, gen: int, base: dict):
+        from hydrofoil.design import _reschedule
+        q = dict(base, main_incidence_deg=inc)
+        try:
+            _reschedule(q)
+        except Exception:
+            pass
+        sched = {k: q[k] for k in ("trim_ff_deg", "trim_ff_speed", "lqr_speeds", "lqr_engage_speed", "est_engage_speed")
+                 if k in q}
+        lqr, err = None, None
+        if str(q.get("controller", "pid")).lower() in ("lqr", "auto") and vp.actuator_model == "servo":
+            lqr, err = vp.make_lqr(q)
+        new_est = vp.make_estimator(q)[0] if vp.sensors is not None else None
+        inc_job["result"] = (gen, inc, sched, lqr, err, new_est)
     hud, hud_img, hud_n = Hud(), None, 0
+    import threading
     with mujoco.viewer.launch_passive(pose.model, pose.data, key_callback=pilot.key,
                                       show_left_ui=False, show_right_ui=False) as v:
         v.cam.type = mujoco.mjtCamera.mjCAMERA_TRACKING
@@ -930,6 +979,43 @@ def run(speed: float = 1.0, wave_cfg: dict | None = None, duration: float = 600.
                         params["flying_height"] = float(ctrl[IDX["height_ref"]])
             last_wall = now
             _apply_gains(vp, params)
+            inc_now = float(params.get("main_incidence_deg", 0.0))
+            if abs(inc_now - inc_applied) > 1e-6:
+                vp.set_main_incidence(inc_now)
+                inc_applied, inc_changed_at = inc_now, now
+                if vp.lqr is not None:
+                    vp.lqr.force = False            # fade to PID until gains for the new angle are ready
+            if inc_changed_at is not None and now - inc_changed_at > 0.6:
+                inc_changed_at = None
+                inc_job["gen"] += 1
+                threading.Thread(target=_rebuild_for_incidence, args=(inc_applied, inc_job["gen"], dict(params)),
+                                 daemon=True).start()
+            if inc_job["result"] is not None:
+                gen, inc, sched, new_lqr, err, new_est = inc_job["result"]
+                inc_job["result"] = None
+                if gen == inc_job["gen"] and abs(inc - inc_applied) < 1e-6:
+                    params.update(sched)
+                    cm = str(params.get("controller", "pid")).lower()
+                    if new_lqr is not None:
+                        new_lqr.auto_handback = (cm == "auto")
+                    if cm == "pid":
+                        vp._lqr_spare = new_lqr
+                    else:
+                        old_lqr = getattr(vp, "lqr", None)
+                        if old_lqr is not None and new_lqr is not None and getattr(old_lqr, "engaged", False):
+                            new_lqr.engaged = True
+                            new_lqr.since_engage = float(getattr(new_lqr, "blend_s", 0.5))
+                            if hasattr(old_lqr, "last") and old_lqr.last is not None:
+                                new_lqr.last = np.array(old_lqr.last, copy=True)
+                            if hasattr(old_lqr, "hist") and isinstance(old_lqr.hist, list):
+                                new_lqr.hist = list(old_lqr.hist)
+                            if hasattr(old_lqr, "integ") and old_lqr.integ is not None:
+                                new_lqr.integ = np.array(old_lqr.integ, copy=True)
+                        vp.lqr = new_lqr
+                    if new_est is not None:
+                        vp.estimator = new_est
+                        vp._est_ready = False
+                    vp.lqr_error = err
             if pilot.wave_type_req is not None:
                 params["wave_type"] = pilot.wave_type_req
                 pilot.wave_type_req = None
@@ -1051,21 +1137,67 @@ def run(speed: float = 1.0, wave_cfg: dict | None = None, duration: float = 600.
             v.set_figures(plots.figures(v.viewport))
             v.sync()
             te = dict(getattr(vp, "_last_turn_envelope", None) or {})
+            alloc_stat = dict(getattr(vp, "_last_alloc_status", None) or {})
+            wave_len = max(float(params.get("wave_wavelength", 5.0)), 0.1)
+            omega_0 = float(getattr(wave, "omega", np.sqrt(2.0 * np.pi * 9.81 / wave_len)))
+            wave_dir_deg = float(params.get("wave_direction", 0.0))
+            yaw_deg = float(np.degrees(state[5]))
+            rel_dir = ((wave_dir_deg - yaw_deg + 180.0) % 360.0) - 180.0
+            omega_e = float(encounter_frequency(omega_0, max(float(state[6]), 0.0), np.radians(rel_dir)))
+            period_e = float(2.0 * np.pi / abs(omega_e)) if abs(omega_e) > 1e-3 else 999.0
+            if float(params.get("wave_amplitude", 0.0)) <= 1e-4:
+                wave_regime = "calm"
+            elif abs(rel_dir) >= 135.0:
+                wave_regime = "head"
+            elif abs(rel_dir) >= 45.0:
+                wave_regime = "beam/quartering"
+            else:
+                wave_regime = "following"
+            hc_calm = (float(state[2]) + float(vp.left_foil.r_attach[2])) / max(float(params["main_chord"]), 1e-3)
+            foil_depth_hc = float(alloc_stat.get("hc_min", hc_calm))
+            cp_min_max = float(alloc_stat.get("cp_min_max", 0.0))
+            power_kw = float(thrust) * max(float(state[6]), 0.0) / 1000.0
             api.telemetry = {
                 "t": t, "mode": mode, "preset": preset, "mass": params["mass"], "x": float(state[0]),
                 "supervisor": sup_stat,
                 "geom": {k: params[k] for k in ("hull_length", "hull_x", "hull_offset", "main_pos_x", "main_pos_z",
                                                 "main_chord", "elev_pos_x", "elev_pos_z", "elev_chord")}
-                        | {"hull_offset": float(vp.hull_offset), "main_pos_z": float(vp.left_foil.r_attach[2])},
-                "wave": {"type": str(params.get("wave_type", "regular")), "amp": params["wave_amplitude"], "len": params["wave_wavelength"], "dir": params["wave_direction"]},
+                        | {
+                            "hull_offset": float(vp.hull_offset),
+                            "main_pos_z": float(vp.left_foil.r_attach[2]),
+                            "hull_beam": float(params.get("hull_beam", 0.3)),
+                            "hull_twin_spacing": float(params.get("hull_twin_spacing", 0.0)),
+                            "hull_boxes": params.get("hull_boxes"),
+                            "cockpit_box": params.get("cockpit_box"),
+                            "cockpit_buoyancy": bool(params.get("cockpit_buoyancy", True)),
+                            "main_span": float(params.get("main_span", 0.5)),
+                            "main_lateral_offset": float(params.get("main_lateral_offset", 0.0)),
+                            "main_flap_center_y": params.get("main_flap_center_y"),
+                            "main_flap_span_frac": float(params.get("main_flap_span_frac", 1.0)),
+                            "main_incidence_deg": float(params.get("main_incidence_deg", 0.0)),
+                            "main_strut_count": int(params.get("main_strut_count", 1)),
+                            "main_strut_y": float(params.get("main_strut_y", 0.0)),
+                            "elev_span": float(params.get("elev_span", 0.4)),
+                            "max_draft": float(params.get("max_draft", 0.15)),
+                        },
+                "wave": {
+                    "type": str(params.get("wave_type", "regular")),
+                    "amp": float(params["wave_amplitude"]),
+                    "len": float(params["wave_wavelength"]),
+                    "dir": wave_dir_deg,
+                    "rel_dir": float(rel_dir),
+                    "omega_e": omega_e,
+                    "period_e": period_e,
+                    "regime": wave_regime,
+                },
                 "speed": float(state[6]), "speed_ref": params["target_speed"], "unit": su,
                 "height": float(height), "height_ref": params["flying_height"],
                 "roll": float(np.degrees(state[3])), "pitch": float(np.degrees(state[4])), "bank_ref": params["phi_ref"],
-                "yaw": float(np.degrees(state[5])), "yaw_rate": float(np.degrees(state[11])),
+                "yaw": yaw_deg, "yaw_rate": float(np.degrees(state[11])),
                 "yaw_rate_cmd": pilot.yaw_rate_cmd,
                 "sideslip": float(np.degrees(np.arctan2(state[7], max(float(state[6]), 0.1)))),
                 "bank_max": float(sup_stat["bank_max"]) if sup_stat is not None else float(te.get("bank_max_deg", BANK_MAX)),
-                "thrust": float(thrust), "draft": float(draft), "controller": ctrl_str,
+                "thrust": float(thrust), "power_kw": power_kw, "draft": float(draft), "controller": ctrl_str,
                 "controller_detail": vp.controller_status(float(state[6])),
                 "sensors": "noisy" if vp.sensors is not None else "ideal", "limits": limits,
                 "surfaces": {k: float(a) for k, a in drive_angles(cmds).items()},
@@ -1077,10 +1209,12 @@ def run(speed: float = 1.0, wave_cfg: dict | None = None, duration: float = 600.
                           "cap": float(vp.drives[d].cap) if d in vp.drives else 0.0}
                     for d in DRIVES
                 },
-                "alloc": dict(getattr(vp, "_last_alloc_status", None) or {}),
+                "alloc": alloc_stat,
                 "turn_envelope": te,
                 "ventilation": {k: float(v) for k, v in vp._vent.items()},
                 "cavitation_sigma": float(getattr(vp, "_last_sigma", 99.0)),
+                "cp_min_max": cp_min_max,
+                "foil_depth_hc": foil_depth_hc,
                 "height_status": dict(getattr(vp, "height_status", None) or {}),
                 "safety_margin": str(params.get("safety_margin", "standard")),
                 "allocator_mode": str(params.get("allocator", "jacobian")),
@@ -1109,20 +1243,24 @@ def main():
     ap.add_argument("--windowed", action="store_true", help="do not maximise the window on start")
     ap.add_argument("--overrides", help="JSON file of design edits (boat editor), see hydrofoil/design.py")
     ap.add_argument("--api-port", type=int, default=8766, help="local live-control API port (launcher page)")
-    ap.add_argument("--preset", choices=("model", "manned"), default="model",
-                    help="model = 25 kg DEFAULT_PARAMS, manned = 250-300 kg MANNED_PARAMS (docs/19)")
+    ap.add_argument("--preset", choices=tuple(PRESETS), default="cad",
+                    help="cad = our boat from the CAD (CAD_PARAMS, docs/26), "
+                         "manned = 250-300 kg MANNED_PARAMS (docs/19), model = 25 kg DEFAULT_PARAMS")
     ap.add_argument("--supervisor", action="store_true",
                     help="enable flight-mode supervisor (takeoff/landing envelope & fault protection; press F to foil/land)")
     ap.add_argument("--safety-margin", choices=("conservative", "standard", "sport"),
                     help="Physics x Control safety envelope preset (default: standard)")
     ap.add_argument("--allocator", choices=("jacobian", "legacy"),
                     help="control surface allocator (default: jacobian)")
+    ap.add_argument("--cockpit-buoyancy", choices=("on", "off"),
+                    help="CAD boat: on = the cockpit box floats; off = no box buoyancy, pontoons scaled to hold the boat")
     a = ap.parse_args()
-    wave_cfg = (dict(wave_amplitude=0.15, wave_wavelength=10.0, wave_direction=a.wave_dir) if a.preset == "manned"
+    wave_cfg = (dict(wave_amplitude=0.15, wave_wavelength=10.0, wave_direction=a.wave_dir) if a.preset in ("manned", "cad")
                 else dict(wave_amplitude=0.05, wave_wavelength=5.0, wave_direction=a.wave_dir)) if a.waves else None
     run(speed=a.speed, wave_cfg=wave_cfg, duration=a.duration, controller=a.controller, sensors=a.sensors,
         preset=a.preset, api_port=a.api_port, maximize=not a.windowed, supervisor=a.supervisor,
         safety_margin=a.safety_margin, allocator=a.allocator, wave_type=a.wave_type,
+        cockpit_buoyancy=None if a.cockpit_buoyancy is None else a.cockpit_buoyancy == "on",
         overrides=json.loads(Path(a.overrides).read_text()) if a.overrides and Path(a.overrides).exists() else None)
 
 

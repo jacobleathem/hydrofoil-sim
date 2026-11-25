@@ -86,7 +86,8 @@ class VehiclePhysics:
     """
 
     def __init__(self, params: dict):
-        self.params = params
+        from hydrofoil.params import resolve_cad_hull
+        self.params = resolve_cad_hull(params)          # pontoons + cockpit box (CAD boat): apply the buoyancy toggle
         p = params
 
         # Hydrodynamic added mass (heave + pitch) from the vehicle's own
@@ -107,16 +108,25 @@ class VehiclePhysics:
         z_fly_nom = p["hull_offset"] - p["flying_height"]
         wet_main_nom = float(np.clip(z_fly_nom + p["main_pos_z"], 0.0, p["hull_offset"] + p["main_pos_z"]))
         wet_elev_nom = float(np.clip(z_fly_nom + p["elev_pos_z"], 0.0, p["hull_offset"] + p["elev_pos_z"]))
-        if p.get("sway_yaw_added_mass", True):
-            added_mass_sway, added_inertia_yaw = strip_added_mass_sway_yaw([
-                (p["main_strut_chord"], wet_main_nom, p["main_pos_x"]),
-                (p["elev_strut_chord"], wet_elev_nom, p["elev_pos_x"]),
+        strut_count = max(int(p.get("main_strut_count", 1)), 1)
+        strut_y = float(p.get("main_strut_y", 0.0) or 0.0)
+        self._dual_front_struts = (strut_count >= 2 and strut_y > 0.0)
+        if p.get("roll_added_inertia", True) and self._dual_front_struts:
+            added_inertia_roll += strip_added_mass_roll([
+                (p["main_strut_chord"], wet_main_nom, -strut_y),
+                (p["main_strut_chord"], wet_main_nom, strut_y),
             ])
+        if p.get("sway_yaw_added_mass", True):
+            added_mass_sway, added_inertia_yaw = strip_added_mass_sway_yaw(
+                [(p["main_strut_chord"], wet_main_nom, p["main_pos_x"])] * strut_count
+                + [(p["elev_strut_chord"], wet_elev_nom, p["elev_pos_x"])])
         else:
             added_mass_sway, added_inertia_yaw = 0.0, 0.0
         # Distributed hull hydrostatics (cross-referenced against Fossen ch.4 GM_T / GM_L, see docs/15).
         self.hull = HullHydrostatics(p["hull_length"], p["hull_beam"], p["hull_x"],
-                                     p["hull_offset"], p["max_draft"])
+                                     p["hull_offset"], p["max_draft"],
+                                     twin_spacing=float(p.get("hull_twin_spacing", 0.0) or 0.0),
+                                     boxes=p.get("hull_boxes") or ())
         self.waterplane_area = self.hull.waterplane_area
         self.rigid_body = RigidBody(
             mass=p["mass"], I_b=np.diag([p["ixx"], p["iyy"], p["izz"]]),
@@ -133,13 +143,17 @@ class VehiclePhysics:
         flap_cm = (thin_airfoil_coeffs(p["main_flap_frac"])["cm_delta"] * p["main_flap_span_frac"]
                    * p.get("flap_cm_factor", 0.8)) if p.get("flap_moment", True) else 0.0
         stall_deg = p.get("flap_stall_deg", 15.0) if p.get("main_actuation", "flap") == "flap" else None
+        # Part-span flap position: main_flap_center_y [m from the centreline] places the flap's extra force at the
+        # flap instead of at the half's centroid (main_lateral_offset). None = the lumped model (no offset).
+        yc = p.get("main_flap_center_y")
+        flap_dy = (float(p["main_lateral_offset"]) - float(yc)) if (yc is not None and p.get("main_actuation", "flap") == "flap") else 0.0
         self.left_foil = Foil(
             FoilGeometry(chord=p["main_chord"], span=p["main_span"], aoa_offset=p.get("main_incidence_deg", 0.0)),
             polar,
             r_attach=np.array([p["main_pos_x"], -p["main_lateral_offset"], p["main_pos_z"]]),
             flap_effectiveness=self.main_flap_eff,
             oswald_efficiency=MAIN_FOIL_OSWALD_EFFICIENCY, flap_cm_delta=flap_cm, flap_stall_deg=stall_deg,
-            cavitation_model=cav_on,
+            cavitation_model=cav_on, flap_dy=flap_dy,
         )
         self.right_foil = Foil(
             FoilGeometry(chord=p["main_chord"], span=p["main_span"], aoa_offset=p.get("main_incidence_deg", 0.0)),
@@ -147,7 +161,7 @@ class VehiclePhysics:
             r_attach=np.array([p["main_pos_x"], p["main_lateral_offset"], p["main_pos_z"]]),
             flap_effectiveness=self.main_flap_eff,
             oswald_efficiency=MAIN_FOIL_OSWALD_EFFICIENCY, flap_cm_delta=flap_cm, flap_stall_deg=stall_deg,
-            cavitation_model=cav_on,
+            cavitation_model=cav_on, flap_dy=-flap_dy,
         )
         self.elev_foil = Foil(
             FoilGeometry(chord=p["elev_chord"], span=p["elev_span"]),
@@ -159,9 +173,20 @@ class VehiclePhysics:
 
         # Vertical struts (hull -> foil), normal axis = body y, so AoA = side-slip and they
         # carry side force; wetted span follows the foil's depth below the surface.
-        self.main_strut = Foil(FoilGeometry(chord=p["main_strut_chord"], span=1.0), polar,
-                               r_attach=np.array([p["main_pos_x"], 0.0, p["main_pos_z"]]),
-                               normal_axis=np.array([0.0, 1.0, 0.0]), cavitation_model=cav_on)
+        if self._dual_front_struts:
+            self.main_strut_l = Foil(FoilGeometry(chord=p["main_strut_chord"], span=1.0), polar,
+                                     r_attach=np.array([p["main_pos_x"], -strut_y, p["main_pos_z"]]),
+                                     normal_axis=np.array([0.0, 1.0, 0.0]), cavitation_model=cav_on)
+            self.main_strut_r = Foil(FoilGeometry(chord=p["main_strut_chord"], span=1.0), polar,
+                                     r_attach=np.array([p["main_pos_x"], strut_y, p["main_pos_z"]]),
+                                     normal_axis=np.array([0.0, 1.0, 0.0]), cavitation_model=cav_on)
+            self.main_strut = self.main_strut_l
+        else:
+            self.main_strut = Foil(FoilGeometry(chord=p["main_strut_chord"], span=1.0), polar,
+                                   r_attach=np.array([p["main_pos_x"], 0.0, p["main_pos_z"]]),
+                                   normal_axis=np.array([0.0, 1.0, 0.0]), cavitation_model=cav_on)
+            self.main_strut_l = self.main_strut
+            self.main_strut_r = self.main_strut
         self.elev_strut = Foil(FoilGeometry(chord=p["elev_strut_chord"], span=1.0), polar,
                                r_attach=np.array([p["elev_pos_x"], 0.0, p["elev_pos_z"]]),
                                normal_axis=np.array([0.0, 1.0, 0.0]), cavitation_model=cav_on)
@@ -180,7 +205,8 @@ class VehiclePhysics:
         actuator_params = p.get("actuator_params") or DEFAULT_ACTUATOR_PARAMS
         self.controller = HydrofoilController(pid_gains, dt=p["dt"], actuator_params=actuator_params)
         self._dw_t, self._dw_eps, self._eps_used = [], [], 0.0   # wing->tail downwash history (transport lag)
-        self._vent = {"left": 0.0, "right": 0.0, "elev": 0.0, "main_strut": 0.0, "elev_strut": 0.0}
+        self._vent = {"left": 0.0, "right": 0.0, "elev": 0.0,
+                      "main_strut": 0.0, "main_strut_l": 0.0, "main_strut_r": 0.0, "elev_strut": 0.0}
         self._thrust_actual = 0.0                                 # lagged propulsion thrust [N]
         self.surge = SurgeController(Kp=p["kp_speed"], Ki=p["ki_speed"], Kd=p["kd_speed"],
                                       dt=p["dt"], max_thrust=p["max_thrust"])
@@ -191,8 +217,11 @@ class VehiclePhysics:
         self.actuator_model = p.get("actuator_model", "servo")
         self.hinges = surface_models(p)
         self.lqr = None
+        self.lqr_error: str | None = None                 # why there is no LQR (cannot trim at its design speeds)
         self._lqr_spare = None
         self.sensors = None
+        self.estimator = None
+        self.estimator_error: str | None = None
         self._last_cmds = dict.fromkeys(("delta_main", "delta_elev", "delta_roll"), 0.0)
         if p.get("sensors", "ideal") == "noisy":
             self._build_estimation()
@@ -302,18 +331,44 @@ class VehiclePhysics:
 
     def _build_lqr(self):
         """Scheduled LQR (control/lqr.py), designed on a PID-configured copy of this plant."""
+        self.lqr, self.lqr_error = self.make_lqr()
+        if self.lqr is not None:
+            self.lqr.auto_handback = (self.params.get("controller") == "auto")
+
+    def make_lqr(self, params: dict | None = None):
+        """Design a scheduled LQR for `params` (default: this boat's). Returns (controller, None), or (None, reason)
+        when the boat cannot trim at enough of the scheduled speeds (e.g. a 0 deg wing below its flying speed), in
+        which case it flies on the PID loops. Safe to call from a background thread."""
         from hydrofoil.control.lqr import LQRController
         # designed on the NOMINAL CG: the controller cannot know where the rider sits (cg_offset is the truth)
-        p = dict(self.params, controller="pid", cg_offset=(0.0, 0.0), cg_z=0.0, supervisor=False)
+        p = dict(params if params is not None else self.params, controller="pid", cg_offset=(0.0, 0.0), cg_z=0.0,
+                 supervisor=False)
         # design latency: the loop delay the gains are computed for. Defaults to the drive model's command
         # delay; on hardware set lqr_delay_s to the MEASURED sensor-to-surface latency.
         delay = p.get("lqr_delay_s")
         if delay is None:
             delay = dict(DEFAULT_SERVO_PARAMS, **(p.get("servo_params") or {}))["delay_s"]
-        self.lqr = LQRController(VehiclePhysics(p), p["dt"], weights=p.get("lqr_weights"), delay_s=delay,
+        try:
+            return LQRController(VehiclePhysics(p), p["dt"], weights=p.get("lqr_weights"), delay_s=delay,
                                  speeds=tuple(p.get("lqr_speeds", (3.0, 4.0, 5.0, 6.0, 7.0))),
-                                 engage_speed=p.get("lqr_engage_speed", 3.2),
-                                 auto_handback=(self.params.get("controller") == "auto"))
+                                 engage_speed=p.get("lqr_engage_speed", 3.2)), None
+        except (RuntimeError, ValueError, np.linalg.LinAlgError) as e:
+            import warnings
+            warnings.warn(f"LQR not available for this boat ({e}); using the PID loops")
+            return None, str(e)
+
+    def set_main_incidence(self, deg: float) -> float:
+        """Change the main wing's fixed mounting angle [deg] live. Physics follows at once; analytically shifts
+        trim_ff_deg while the background rebuild re-derives LQR/Kalman schedules (see the viewer)."""
+        deg = float(deg)
+        old_deg = float(self.params.get("main_incidence_deg", 0.0))
+        self.params["main_incidence_deg"] = deg
+        for f in (self.left_foil, self.right_foil):
+            f.geometry.aoa_offset = deg
+        if abs(deg - old_deg) > 1e-9 and float(self.params.get("trim_ff_speed", 0.0)) > 0.0 and self.main_flap_eff > 1e-4:
+            self.params["trim_ff_deg"] = float(self.params.get("trim_ff_deg", 0.0)) - (deg - old_deg) / self.main_flap_eff
+        self._eta_turn_cache = None
+        return deg
 
     def set_controller_mode(self, mode: str) -> str:
         """Switch flight controller mode at runtime between 'auto', 'lqr', and 'pid'."""
@@ -363,24 +418,36 @@ class VehiclePhysics:
                     "blending_in": False, "blending_out": False, "blend": 0.0,
                     "reason": "Manual PID mode — three independent SISO loops control height, pitch, and roll"}
         if self.lqr is None:
+            reason = ("PID active while LQR initializes" if not getattr(self, "lqr_error", None) else
+                      "LQR unavailable: this boat cannot fly level at the LQR design speeds "
+                      "(raise the wing mounting angle or the speed); the PID loops are flying")
             return {"mode": mode, "active": "PID", "engaged": False,
-                    "blending_in": False, "blending_out": False, "blend": 0.0,
-                    "reason": "PID active while LQR initializes"}
+                    "blending_in": False, "blending_out": False, "blend": 0.0, "reason": reason}
         st = self.lqr.status_dict(u)
         st["mode"] = mode
         if self.supervisor is not None and self.supervisor.mode == "DISPLACEMENT":
             st["reason"] = f"Hull in water ({self.supervisor.mode}) — PID stabilizes roll/pitch while flaps stay neutral"
         return st
 
+    def make_estimator(self, params: dict | None = None):
+        """Design a scheduled KalmanEstimator on nominal CG. Returns (estimator, None) or (None, reason)."""
+        from hydrofoil.estimation.kalman import KalmanEstimator
+        p = dict(params if params is not None else self.params, controller="pid", sensors="ideal",
+                 cg_offset=(0.0, 0.0), cg_z=0.0, supervisor=False)
+        try:
+            return KalmanEstimator(VehiclePhysics(p), p["dt"], process=p.get("kf_process"),
+                                   speeds=tuple(p.get("lqr_speeds", (3.0, 4.0, 5.0, 6.0, 7.0)))), None
+        except (RuntimeError, ValueError, np.linalg.LinAlgError) as e:
+            return None, str(e)
+
     def _build_estimation(self):
         """Noisy sensors + Kalman estimator (params['sensors'] = 'noisy'); controllers then see estimates."""
         from hydrofoil.sensors.models import SensorSuite
-        from hydrofoil.estimation.kalman import KalmanEstimator, HeaveFilter
-        p = dict(self.params, controller="pid", sensors="ideal", cg_offset=(0.0, 0.0), supervisor=False)   # nominal CG model
+        from hydrofoil.estimation.kalman import HeaveFilter
+        p = self.params
         self.sensors = SensorSuite(seed=p.get("sensor_seed", 0), scale=p.get("sensor_noise_scale", 1.0),
                                    config=p.get("sensor_config"))
-        self.estimator = KalmanEstimator(VehiclePhysics(p), p["dt"], process=p.get("kf_process"),
-                                         speeds=tuple(p.get("lqr_speeds", (3.0, 4.0, 5.0, 6.0, 7.0))))
+        self.estimator, self.estimator_error = self.make_estimator(p)
         self.heave = HeaveFilter(p["dt"], wave=p.get("kf_wave"), **(p.get("kf_heave") or {}))
         self._est_ready = False
         self._u_meas = 0.0
@@ -491,7 +558,7 @@ class VehiclePhysics:
             return state                                   # sensors not all up yet (first few ms)
         c = state.copy()
         z_trim = self.hull_offset - p["flying_height"]
-        if self._u_meas < p.get("est_engage_speed", 3.0) and not self._est_ready:
+        if self.estimator is None or (self._u_meas < p.get("est_engage_speed", 3.0) and not self._est_ready):
             for k, i in (("z", 2), ("phi", 3), ("theta", 4), ("p", 9), ("q", 10), ("r", 11)):
                 if k in meas:
                     c[i] = meas[k]
@@ -518,14 +585,20 @@ class VehiclePhysics:
     def reset(self):
         """Reset controllers and drive states (e.g. on a sim restart)."""
         if getattr(self, "sensors", None) is not None:
-            self.sensors.reset(); self.estimator.reset(); self.heave.reset(); self._est_ready = False; self._last_cmds = dict.fromkeys(("delta_main", "delta_elev", "delta_roll"), 0.0)
+            self.sensors.reset()
+            if getattr(self, "estimator", None) is not None:
+                self.estimator.reset()
+            self.heave.reset()
+            self._est_ready = False
+            self._last_cmds = dict.fromkeys(("delta_main", "delta_elev", "delta_roll"), 0.0)
             self._init_height_monitor()
         if getattr(self, "lqr", None) is not None:
             self.lqr.reset()
             if self.params.get("controller") == "pid":
                 self._lqr_spare, self.lqr = self.lqr, None
         self._dw_t, self._dw_eps, self._eps_used = [], [], 0.0
-        self._vent = {"left": 0.0, "right": 0.0, "elev": 0.0, "main_strut": 0.0, "elev_strut": 0.0}
+        self._vent = {"left": 0.0, "right": 0.0, "elev": 0.0,
+                      "main_strut": 0.0, "main_strut_l": 0.0, "main_strut_r": 0.0, "elev_strut": 0.0}
         self._thrust_actual = 0.0
         self.controller.reset()
         self.surge.reset()
@@ -660,24 +733,43 @@ class VehiclePhysics:
             eff * delta_trim(u) + incidence = (eff * d0 + incidence) * (vs / u)^2."""
         p = self.params
         d0, vs = p.get("trim_ff_deg", 0.0), p.get("trim_ff_speed", 0.0)
-        if d0 == 0.0 or vs <= 0.0 or self.main_flap_eff <= 1e-6:
+        if (abs(d0) < 1e-9 and abs(float(p.get("main_incidence_deg", 0.0))) < 1e-9) or vs <= 0.0 or self.main_flap_eff <= 1e-6:
             return 0.0
         inc = p.get("main_incidence_deg", 0.0) / self.main_flap_eff    # incidence in flap degrees
         cmd_lim = float(p.get("flap_cmd_max_deg", min(20.0, float(p.get("flap_stop_deg", 30.0)))))
         return float(np.clip((d0 + inc) * (vs / max(float(u), 0.5 * vs)) ** 2 - inc, -cmd_lim, cmd_lim))
 
     def rest_state(self) -> np.ndarray:
-        """Initial state: at rest, floating at the hull's buoyant equilibrium draft."""
+        """Initial state: at rest, floating at the hull's buoyant equilibrium draft across hull and any boxes."""
         p = self.params
-        rest_draft = min(p["mass"] / max(RHO_WATER * self.waterplane_area, 1e-6), p["max_draft"])
+        h = self.hull
+        m_need = float(p["mass"]) / RHO_WATER
+        if not h.boxes:
+            rest_draft = min(m_need / max(h.waterplane_area, 1e-6), h.max_draft)
+        else:
+            a_main = h.n_hulls * float(p["hull_length"]) * float(p["hull_beam"])
+            cuts = sorted({0.0, float(h.max_draft), *(float(b["height"]) for b in h.boxes)})
+            rest_draft = cuts[-1]
+            for lo_c, hi_c in zip(cuts[:-1], cuts[1:]):
+                v_lo = min(lo_c, h.max_draft) * a_main + sum(min(lo_c, b["height"]) * b["length"] * b["beam"] for b in h.boxes)
+                v_hi = min(hi_c, h.max_draft) * a_main + sum(min(hi_c, b["height"]) * b["length"] * b["beam"] for b in h.boxes)
+                if v_hi >= m_need - 1e-9 and v_hi > v_lo + 1e-9:
+                    rest_draft = lo_c + (m_need - v_lo) / (v_hi - v_lo) * (hi_c - lo_c)
+                    break
         z0 = self.hull_offset + rest_draft
         eta0 = np.array([0.0, 0.0, z0, 0.0, np.radians(2.0), 0.0])
         nu0 = np.zeros(6)
         return np.concatenate([eta0, nu0])
 
     def _foils(self):
-        return {"left": self.left_foil, "right": self.right_foil, "elev": self.elev_foil,
-                "main_strut": self.main_strut, "elev_strut": self.elev_strut}
+        out = {"left": self.left_foil, "right": self.right_foil, "elev": self.elev_foil,
+               "elev_strut": self.elev_strut}
+        if self._dual_front_struts:
+            out["main_strut_l"] = self.main_strut_l
+            out["main_strut_r"] = self.main_strut_r
+        else:
+            out["main_strut"] = self.main_strut
+        return out
 
     def wave_sample(self, eta, t, wave) -> WaveSample:
         """Sample the wave field at the hull and at every foil's world position."""
@@ -695,12 +787,15 @@ class VehiclePhysics:
             # orbital_velocity wants depth below the still surface as a NEGATIVE z (z <= 0)
             v_ned = wave.orbital_velocity(pos[0], pos[1], -pos[2], t)
             smp.foil_vel_body[name] = R.T @ v_ned
+        if self._dual_front_struts:
+            smp.foil_surface_z["main_strut"] = 0.5 * (smp.foil_surface_z["main_strut_l"] + smp.foil_surface_z["main_strut_r"])
+            smp.foil_vel_body["main_strut"] = 0.5 * (smp.foil_vel_body["main_strut_l"] + smp.foil_vel_body["main_strut_r"])
         return smp
 
     @staticmethod
     def calm_sample() -> WaveSample:
         z3 = np.zeros(3)
-        names = ("left", "right", "elev", "main_strut", "elev_strut")
+        names = ("left", "right", "elev", "main_strut", "main_strut_l", "main_strut_r", "elev_strut")
         return WaveSample(0.0, 0.0, 0.0, {n: 0.0 for n in names}, {n: z3 for n in names})
 
     def _submergence_over_chord(self, foil, eta, water_surface_z, r_attach: np.ndarray | None = None):
@@ -798,7 +893,12 @@ class VehiclePhysics:
             return strut.generalized_force(nu_rel, span=wet, r_attach=r, ventilation=self._vent.get(name, 0.0))
 
         tau = np.zeros(6)
-        tau += strut_force("main_strut")
+        if self._dual_front_struts:
+            n_front = max(int(p.get("main_strut_count", 2)), 2)
+            scale_front = 0.5 * n_front
+            tau += (strut_force("main_strut_l") + strut_force("main_strut_r")) * scale_front
+        else:
+            tau += strut_force("main_strut") * max(int(p.get("main_strut_count", 1)), 1)
         tau += strut_force("elev_strut")
         dl_raw = cmds["delta_left"] if "delta_left" in cmds else (cmds["delta_main"] - cmds["delta_roll"])
         dr_raw = cmds["delta_right"] if "delta_right" in cmds else (cmds["delta_main"] + cmds["delta_roll"])
@@ -814,6 +914,7 @@ class VehiclePhysics:
         tau += foil_force("elev", cmds["delta_elev"], downwash=self._eps_used)
         tau += self.hull.buoyancy(eta, env.hull_cell_surface_z)
         tau += gravity_force(p["mass"], eta)
+        tau += self.hull.box_drag(nu, eta, env.hull_cell_surface_z, rot_damping=0.35 * p["hull_rot_damping"])
         tau += self.hull.drag(nu, self.hull.mean_draft(eta, env.hull_cell_surface_z),
                               p["hull_drag_coeff"], p["hull_rot_damping"],
                               hull_length=p["hull_length"], hump_amp=p.get("hull_hump_amp", 0.8))
@@ -876,7 +977,7 @@ class VehiclePhysics:
                 dl, dr, de = (self.drives[n] for n in ("left", "right", "elev"))   # drive encoders: angle, rate
                 act = ([0.5 * np.degrees(dl.delta + dr.delta), np.degrees(de.delta), 0.5 * np.degrees(dr.delta - dl.delta)],
                        [0.5 * np.degrees(dl.rate + dr.rate), np.degrees(de.rate), 0.5 * np.degrees(dr.rate - dl.rate)])
-                cur_draft = self.hull.mean_draft(eta, env.hull_cell_surface_z)
+                cur_draft = self.hull.wetted_draft(eta, env.hull_cell_surface_z)
                 raw = self.lqr.update(cstate, z_ref, np.radians(p["phi_ref"]), np.radians(p["theta_ref"]),
                                       raw, act, draft=cur_draft)
             if self.supervisor is not None:
@@ -964,7 +1065,12 @@ class VehiclePhysics:
             beta_trig = float(p.get("strut_vent_deg", 8.5))
             beta_rec = float(p.get("strut_vent_recover_deg", 4.5))
             cos_tilt = max(float(np.cos(new_state[3]) * np.cos(new_state[4])), 0.25)
-            for name, strut in (("main_strut", self.main_strut), ("elev_strut", self.elev_strut)):
+            strut_items = (
+                (("main_strut_l", self.main_strut_l), ("main_strut_r", self.main_strut_r), ("elev_strut", self.elev_strut))
+                if self._dual_front_struts
+                else (("main_strut", self.main_strut), ("elev_strut", self.elev_strut))
+            )
+            for name, strut in strut_items:
                 h = self._submergence_over_chord(strut, new_state[:6], env.foil_surface_z[name]) * strut.geometry.chord
                 wet = float(np.clip(h / cos_tilt, 0.0, self.hull_offset + strut.r_attach[2]))
                 r_mid = strut.r_attach - np.array([0.0, 0.0, 0.5 * wet])
@@ -978,10 +1084,12 @@ class VehiclePhysics:
                 elif v > 0.0 and (beta_s < beta_rec or V_s < 2.0 or wet <= 0.1):
                     v -= v * min(1.0, dt / 0.40)
                 self._vent[name] = 0.0 if v < 1e-4 else float(min(1.0, v))
+            if self._dual_front_struts:
+                self._vent["main_strut"] = max(self._vent["main_strut_l"], self._vent["main_strut_r"])
 
         # last_CL is from the final RK stage (~ end of step): record it for the transport delay
         self._dw_t.append(t + dt); self._dw_eps.append(self._downwash_qs())
         while len(self._dw_t) > 1 and self._dw_t[1] < t + dt - 5.0:
             del self._dw_t[0], self._dw_eps[0]
-        draft = self.hull.mean_draft(new_state[:6], env.hull_cell_surface_z)   # footprint-averaged draft
+        draft = self.hull.wetted_draft(new_state[:6], env.hull_cell_surface_z)
         return new_state, cmds, thrust, draft, wave_elev

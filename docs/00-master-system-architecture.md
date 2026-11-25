@@ -193,6 +193,8 @@ flowchart TB
   - Centerline root-vortex cross-coupling when `delta_L != delta_R`:
     $$\delta_{\text{eff},L} = (1 - k_{cc})\delta_L + k_{cc}\delta_R,\qquad \delta_{\text{eff},R} = (1 - k_{cc})\delta_R + k_{cc}\delta_L$$
     which vanishes identically whenever $\delta_L = \delta_R$.
+  - **Front Strut Configuration (`main_strut_count`, `±main_strut_y`):** Single centerline strut (`main_strut_count = 1`, e.g., `model`/`manned`) or true dual front struts (`main_strut_count = 2`, `main_strut_l`/`main_strut_r` at `y = ±main_strut_y`, e.g., `cad` preset), each independently sampling local wave orbital velocity, surface breach/ventilation, sideslip drag, and differential yaw damping $M_z$.
+  - **Resilient Speed-Scheduled Estimation (`KalmanEstimator`):** Initializes across `lqr_speeds` while skipping speeds where `trim()` fails or exceeds `limit_deg`, falling back cleanly to `HeaveFilter` + PID loops when no trimmed flight speed exists (e.g., `cad` at `0°` mounting angle).
   - **3D Vertical CG & Thrust Line (`cg_z`, `prop_pos_z`):** Payload vertical coordinate `cg_z` (`+z` UP) shifts all foil/strut `r_attach[2]` (`_r_nominal - [dx, dy, -cg_z]`), shifts `HullHydrostatics` bottom cells and `hull_offset`, and adds propulsion pitching moment `tau[4] += thrust * (prop_pos_z + cg_z)` in `physics_rhs`.
 
 ---
@@ -216,6 +218,7 @@ Every core backend subsystem is streamed over `http://127.0.0.1:8766/state` (and
 
 | Field | Producer | Frontend Consumer (`page.html`) |
 |---|---|---|
+| `geom`, `wave`, `foil_depth_hc`, `cp_min_max`, `power_kw` | `viewer.py` (`api.telemetry`, `encounter_frequency`) | Split Fly Hero: Side Elevation (`#side` with cockpit box & wing incidence) + Top-Down Turning & Oblique Waves (`#topView` with planform flaps, `R_min`/`R_now` arcs, animated wave crests at relative angle `μ`, compass `ψ`) + `#gd` (`h/c`), `#gcav` (`σ` vs `|Cp_min|`), `#gwav` (`T_e`, `μ`), `#gnav` (`ψ`, `β`, `r`) |
 | `alloc` | `ControlAllocator.allocate()` | Independent Front Flaps range bars, live safe `[lo, hi]` bands, dynamic mechanical/command `stops`, binding tags, reverse-drive status pill, `Δδ`, `solve_ms`, lift margin, pitch reserve |
 | `turn_envelope` | `compute_turn_envelope()` / `Supervisor` | Top-Down Turn Safety SVG (`#turnSvg` with `R_min` port/starboard dashed boundary circles & live trajectory arc), heading `ψ` (`yaw`), `r_max`, `R_min`, `β/β_max`, `lat_g/cap`, binding constraint |
 | `supervisor` | `Supervisor.status` | Mode badge, estimated wave amplitude $A_w$, jammed-flap state, active faults/warnings, and persistent `sup.log` transition/fault history |

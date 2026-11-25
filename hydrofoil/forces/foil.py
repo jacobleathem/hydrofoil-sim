@@ -289,8 +289,13 @@ class Foil:
         flap_cm_delta: float = 0.0,
         flap_stall_deg: float | None = None,
         cavitation_model: bool = False,
+        flap_dy: float = 0.0,
     ):
         self.geometry = geometry
+        # Spanwise (body y) offset [m] of the flap's own centroid from this panel's r_attach. The whole panel's lift
+        # acts at r_attach; with a part-span flap the EXTRA force the flap makes acts where the flap is, so its roll
+        # and yaw lever arms differ. 0 = flap centred on the panel (the original lumped model).
+        self.flap_dy = float(flap_dy)
         self.tables = tables
         self.r_attach = np.asarray(r_attach, dtype=float)
         # normal_axis: body-frame unit vector the foil's AoA is measured along (positive
@@ -389,6 +394,7 @@ class Foil:
         downwash_rad: float = 0.0,
         ventilation: float = 0.0,
         with_deriv: bool = False,
+        _apply_flap_dy: bool = True,
     ) -> dict:
         """Shared evaluation of 6-DOF generalized force and analytical delta derivative."""
         span_use = self.geometry.span if span is None else float(span)
@@ -525,6 +531,21 @@ class Foil:
             ], dtype=float)
         else:
             dtau_ddelta = None
+
+        if _apply_flap_dy and self.flap_dy and self.flap_effectiveness > 0.0:
+            # Move the flap's force increment F(delta) - F(0) from r_attach to the flap centroid (dy along body y):
+            # the extra moment is (0, dy, 0) x dF = (dy dFz, 0, -dy dFx). All of dF/ddelta is flap increment.
+            dy = self.flap_dy
+            if delta != 0.0:
+                tau0 = self._eval_force_and_deriv(
+                    nu, delta=0.0, submergence_over_chord=submergence_over_chord, span=span, r_attach=r_attach,
+                    downwash_rad=downwash_rad, ventilation=ventilation, with_deriv=False,
+                    _apply_flap_dy=False)["tau"]
+                tau[3] += dy * (tau[2] - tau0[2])
+                tau[5] -= dy * (tau[0] - tau0[0])
+            if dtau_ddelta is not None:
+                dtau_ddelta[3] += dy * dtau_ddelta[2]
+                dtau_ddelta[5] -= dy * dtau_ddelta[0]
 
         return {
             "tau": tau,

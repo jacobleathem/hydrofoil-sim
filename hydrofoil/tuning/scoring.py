@@ -74,11 +74,15 @@ def _run_supervised(params: dict) -> dict:
     sup = vp.supervisor
     s, t = vp.rest_state(), 0.0
     t_req, t_foil, lifted, touch = SUPERVISED_PLAN[1][0], None, False, 0
+    v_takeoff_cmd = max(7.0, float(p.get("target_speed", 7.0)), float(p.get("lqr_engage_speed", 7.0)) + 0.5)
     rec = []
     for i in range(int(SUPERVISED_T / dt)):
         for tt, cmd in SUPERVISED_PLAN:
             if i == int(round(tt / dt)):
-                sup.pilot.update(cmd)
+                cmd_use = dict(cmd)
+                if cmd_use.get("foil") and "speed" in cmd_use:
+                    cmd_use["speed"] = v_takeoff_cmd
+                sup.pilot.update(cmd_use)
         s, c, th, draft, _ = vp.step(s, t, CalmWater())
         t += dt
         if not np.all(np.isfinite(s)):
@@ -95,7 +99,7 @@ def _run_supervised(params: dict) -> dict:
         if sup.mode == "FOILING" and t_foil is None:
             t_foil = t
         if t_foil is not None:
-            zref = p["hull_offset"] - p["flying_height"]          # the supervisor moves the reference
+            zref = vp.hull_offset - p["flying_height"]          # the supervisor moves the reference
             lim = any(v.get("limited") for v in c.get("drive", {}).values())
             rec.append((t, s[2] - zref, np.degrees(s[3]), np.degrees(s[4]), c["delta_main"], lim))
         if t_foil is not None and t > t_foil + 10.0:
@@ -166,20 +170,25 @@ def run_scenario(params: dict, name: str) -> dict:
     except Exception as e:                               # e.g. no trim for the LQR design
         return {"failed": True, "why": f"build: {e}"}
     s = vp.rest_state() if start == "rest" else _flying_state(vp)
-    zref = p["hull_offset"] - p["flying_height"]
+    zref = vp.hull_offset - p["flying_height"]
     t, rec = 0.0, []
     shift_at = 5.0
     touch = None
+    phi_tgt_max = 12.0
+    if name == "turn":
+        from hydrofoil.control.supervisor import compute_turn_envelope
+        te0 = compute_turn_envelope(vp, s, wave_amp=0.0)
+        phi_tgt_max = float(np.clip(0.85 * float(te0.get("bank_max_deg", 12.0)), 4.0, 12.0))
     for i in range(int(T / dt)):
         if name == "shift" and abs(t - shift_at) < dt / 2:
             vp.set_cg_offset((0.05 * L, 0.03 * L))
         elif name == "turn":
             if 1.0 <= t < 2.0:
-                phi_cmd = min(12.0, (t - 1.0) * 12.0)
+                phi_cmd = min(phi_tgt_max, (t - 1.0) * phi_tgt_max)
             elif 2.0 <= t < 7.0:
-                phi_cmd = 12.0
+                phi_cmd = phi_tgt_max
             elif 7.0 <= t < 8.0:
-                phi_cmd = max(0.0, 12.0 - (t - 7.0) * 12.0)
+                phi_cmd = max(0.0, phi_tgt_max - (t - 7.0) * phi_tgt_max)
             else:
                 phi_cmd = 0.0
             vp.params["phi_ref"] = phi_cmd
@@ -248,7 +257,7 @@ def run_scenario(params: dict, name: str) -> dict:
     if name == "turn":
         bank_win = (tt >= 1.0) & (tt < 7.0)
         hold_win = (tt >= 2.5) & (tt < 7.0)
-        out["roll_overshoot"] = float(max(0.0, float(roll[bank_win].max()) - 12.0))
+        out["roll_overshoot"] = float(max(0.0, float(roll[bank_win].max()) - phi_tgt_max))
         out["roll_rms_err"] = float(np.sqrt(np.mean((roll[hold_win] - r[hold_win, 9]) ** 2)))
         out["sideslip_peak"] = float(r[m, 10].max())
     out["roll_peak"] = float(np.abs(roll[m]).max())

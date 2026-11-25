@@ -183,3 +183,98 @@ MANNED_PARAMS.update({
                     "du_main": 566.2, "du_elev": 566.2, "du_roll": 566.2},
     "lqr_speeds": (4.5, 5.5, 6.5, 8.0, 9.5), "lqr_engage_speed": 4.8, "est_engage_speed": 4.5,
 })
+
+
+# Our boat as drawn in CAD (SolidWorks "Hydrofoil Assembly+wings_not_finished" and "Split Wing Assembly", measured
+# from their STL exports on 2026-11-24; full measurement notes in docs/26-cad-boat-preset.md). Starts from the
+# manned preset (controller gains, drives, estimator), then replaces every dimension the CAD defines.
+#
+# MEASURED from CAD: wing/elevator geometry and positions, NACA 0009 sections (9.0 % thick), 0 deg mounting on
+# both wings, flap notch (inboard 0-240 mm each side, 100 mm of the 300 mm chord), two front masts at +-0.35 m,
+# one rear mast, twin pontoons, propeller position.
+# ASSUMED (not in the STL, which has no mass): mass 275 kg and inertias (manned preset), CG longitudinally over the
+# main wing's quarter chord and 0.35 m above the pontoon bottoms, elevator pivot and both surfaces' travel limits.
+# Body frame origin = CG. CAD -> body: x = (X_cad - 1716) mm forward, z_down = (863 - Y_cad) mm.
+CAD_PARAMS: dict[str, Any] = dict(MANNED_PARAMS)
+CAD_PARAMS.update({
+    "visual": "cad",                       # viewer draws the CAD layout (hydrofoil/cad_geometry.py)
+    # Main wing: 1.353 m span, 0.3665 m^2 with the flaps in, AR 5.0, rounded tips. Each half is modelled as one
+    # rectangular strip of the same area (0.6765 m x 0.271 m mean chord) whose lift acts at the half's area
+    # centroid, 0.31 m from the centreline.
+    "main_chord": 0.271, "main_span": 0.6765, "main_lateral_offset": 0.31,
+    "main_incidence_deg": 0.0,             # measured 0.0 deg; the dashboard can demonstrate 0-5 deg
+    # Flaps: two independent plain flaps meeting at the centreline, each 0.24 m of span (35.5 % of the half) and
+    # 100 mm of the local 300 mm chord. Their extra lift acts 0.12 m from the centreline (main_flap_center_y), not at
+    # the half's centroid, which cuts roll authority to about 0.39x of a centred flap.
+    "main_flap_frac": 0.333, "main_flap_span_frac": 0.355, "main_flap_setback": 0.0,
+    "main_flap_center_y": 0.12, "main_flap_chord": 0.100,
+    "tuned_for": {"main_flap_frac": 0.25, "main_flap_span_frac": 1.0, "main_flap_setback": 0.15, "gear_ratio": 20.0},
+    # Positions relative to the CG: wing quarter chord 1.099 m below, elevator quarter chord 2.391 m aft and 1.118 m
+    # below (0.149 x 0.677 m, all-moving). Hull bottom 0.35 m below the CG, so the struts are 0.749 m long.
+    "main_pos_x": 0.0, "main_pos_z": 1.099,
+    "elev_chord": 0.149, "elev_span": 0.677, "elev_pos_x": -2.391, "elev_pos_z": 1.118,
+    "elev_pivot_frac": 0.22,               # PLACEHOLDER: the rear mast sits at 49 % chord; pivot not drawn yet
+    # Two streamlined front masts (0.28 m chord, 51 mm thick) at +-0.35 m, one 0.10 m rear mast on the centreline.
+    "main_strut_chord": 0.28, "main_strut_count": 2, "main_strut_y": 0.35, "elev_strut_chord": 0.10,
+    # Twin pontoons: 2.54 m long, 265 mm diameter, 1.308 m apart, centred 0.483 m aft of the CG. Modelled as
+    # wall-sided hulls of equal volume (beam = pi/4 x diameter) with the full diameter as draft; hull_beam,
+    # max_draft and hull_boxes are filled in by resolve_cad_hull() below.
+    "hull_offset": -0.35, "hull_length": 2.54, "hull_twin_spacing": 1.308, "hull_x": -0.483,
+    "pontoon_diameter": 0.265,
+    # Cockpit: a sealed 48 x 32 x 24 in box (1.219 x 0.813 x 0.610 m, 0.605 m^3, ~620 kg of buoyancy when fully
+    # under) centred in the frame between the pontoons, its bottom level with the pontoon bottoms. 1.219 m along the
+    # boat. Its water drag is a flat-faced box (C_D 1) on whatever is submerged.
+    "cockpit_box": {"name": "cockpit", "x": -0.347, "y": 0.0, "length": 1.219, "beam": 0.813, "height": 0.610},
+    # Toggle (dashboard "Cockpit box buoyancy"): True = the box floats (and drags) as above. False = the box is out of
+    # the water calculation and the pontoon DIAMETER is scaled so the pontoons alone hold the boat with
+    # pontoon_reserve x its weight when fully under (2.0 = floats with the pontoons about half under, a common
+    # pontoon-boat rule; never smaller than the CAD diameter). Length and spacing stay as drawn.
+    "cockpit_buoyancy": True, "pontoon_reserve": 2.0,
+    # Wing 0.40 m (1.5 chords) under the surface when the pontoons are 0.35 m clear.
+    "flying_height": 0.35,
+    # Two propellers (about 0.21 m diameter) on the front masts, 0.386 m aft of and 0.96 m below the CG: the thrust
+    # line pitches the nose up by thrust x 0.96 m. The sim applies the total thrust on the centreline.
+    "prop_pos_z": 0.96, "prop_count": 2,
+    "default_payloads": [{"name": "Rider", "mass": 75.0, "x": -0.35, "y": 0.0, "z": 0.0}],
+    # Cruise target: the team's planned 8 m/s (as the manned sizing). NOT tuned to make this geometry fly.
+    "target_speed": 8.0,
+    # Trim schedule DERIVED for the 0 deg wing by hydrofoil.design._reschedule (flap inside +-15 deg): level flight
+    # first trims at 15.5 m/s, so the LQR only exists there. Re-derived live when the mounting angle changes.
+    "lqr_speeds": (15.5, 15.62, 15.75, 15.88, 16.0), "lqr_engage_speed": 15.8, "est_engage_speed": 15.5,
+    "trim_ff_deg": 13.54, "trim_ff_speed": 16.0,
+})
+
+def resolve_cad_hull(p: dict[str, Any], preserve_user_dims: tuple[str, ...] | set[str] = ()) -> dict[str, Any]:
+    """Fill hull_beam / max_draft / hull_boxes of a boat that describes its hull as pontoons + a cockpit box
+    (the CAD preset), according to the cockpit_buoyancy toggle. Preserves explicitly overridden hull dimensions.
+    Idempotent; other presets are returned unchanged. Modifies and returns p."""
+    import math
+    if "pontoon_diameter" not in p:
+        return p
+    d_cad = float(p["pontoon_diameter"])
+    box = p.get("cockpit_box")
+    if p.get("cockpit_buoyancy", True):
+        d, boxes = d_cad, ([dict(box)] if box else [])
+    else:
+        # two cylinders of length L hold reserve x mass when fully under: 2 * pi d^2 / 4 * L * rho = reserve * m
+        need = float(p.get("pontoon_reserve", 2.0)) * float(p["mass"])
+        d = max(d_cad, math.sqrt(2.0 * need / (math.pi * float(p["hull_length"]) * 1025.0)))
+        boxes = []
+    p["pontoon_diameter_used"] = round(d, 4)
+    if "max_draft" not in preserve_user_dims:
+        p["max_draft"] = d
+    if "hull_beam" not in preserve_user_dims:
+        p["hull_beam"] = math.pi / 4.0 * d          # wall-sided equivalent: same volume as the cylinder
+    p["hull_boxes"] = boxes
+    return p
+
+
+resolve_cad_hull(CAD_PARAMS)
+
+PRESETS: dict[str, dict[str, Any]] = {"model": DEFAULT_PARAMS, "manned": MANNED_PARAMS, "cad": CAD_PARAMS}
+PRESET_LABELS = {"cad": "Our boat (CAD)", "manned": "Manned (Josh's sizing)", "model": "25 kg model"}
+
+
+def preset_params(name: str) -> dict[str, Any]:
+    """A fresh copy of the named preset ("model", "manned" or "cad"); unknown names give the model."""
+    return dict(PRESETS.get(str(name), DEFAULT_PARAMS))
