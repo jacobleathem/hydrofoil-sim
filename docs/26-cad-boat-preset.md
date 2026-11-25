@@ -1,5 +1,7 @@
 # 26 — CAD boat preset (`--preset cad`)
 
+Team summary in plain language: [27-cad-boat-summary-for-the-team.md](27-cad-boat-summary-for-the-team.md).
+
 The `cad` preset (`hydrofoil/params.py: CAD_PARAMS`) is our boat as drawn in SolidWorks, so the sim shows what
 **that** design does, not a tuned stand-in. It is the dashboard's default boat; **Load our CAD boat** (top bar)
 or **Load our CAD values** (Boat editor) clears any saved edits for it and relaunches. Nothing in it was tuned to
@@ -24,7 +26,7 @@ CAD → body: `x = (X_cad − 1716 mm)` forward, `z_down = (863 mm − Y_cad)`.
 | Front masts | two, ±0.35 m, 0.28 m chord, 51 mm thick | `main_strut_count` 2, `main_strut_y`, `main_strut_chord` |
 | Rear mast | one, centreline, 102 × 76 mm | `elev_strut_chord` 0.10 |
 | Hull | twin pontoons, 2.54 m × Ø0.265 m, 1.308 m apart, centre 0.483 m aft of the main wing | `hull_twin_spacing`, `hull_length`, `hull_beam` 0.208 (= π/4 × Ø, same volume), `max_draft` 0.265, `hull_x` |
-| Cockpit box | sealed 48 × 32 × 24 in (1.219 × 0.813 × 0.610 m, 0.605 m³ ≈ 620 kg buoyancy), centred in the frame (0.347 m aft of the main wing), bottom level with the pontoon bottoms | `hull_boxes` |
+| Cockpit box | sealed 48 × 32 × 24 in (1.219 × 0.813 × 0.610 m, 0.605 m³ ≈ 620 kg buoyancy), centred in the frame (0.347 m aft of the main wing), bottom level with the pontoon bottoms | `cockpit_box` |
 | Propellers | two, Ø ≈ 0.21 m, 0.386 m aft of and 0.139 m above the main wing | `prop_pos_z` 0.96 (thrust line below the CG) |
 
 ## Assumed (not in the STL: it has no mass)
@@ -48,6 +50,17 @@ CAD → body: `x = (X_cad − 1716 mm)` forward, `z_down = (863 mm − Y_cad)`.
 * The LQR skips speeds where the boat has no level trim inside the surface limits, and falls back to the PID loops
   (with a dashboard message) if there are none.
 
+## Cockpit buoyancy toggle
+
+Dashboard launch bar → **Cockpit box buoyancy (CAD boat)** (viewer: `--cockpit-buoyancy on|off`,
+params: `cockpit_buoyancy`). `params.resolve_cad_hull()` turns it into `hull_beam` / `max_draft` / `hull_boxes`:
+
+* **On** (default): CAD pontoons (Ø 0.265 m, 287 kg) + the floating, dragging cockpit box.
+* **Off**: the box is out of the water calculation (drawn see-through) and the pontoon **diameter** is scaled so
+  the two pontoons alone hold `pontoon_reserve` × the boat's weight when fully under (default 2.0 = floats about
+  half under; never smaller than CAD). At 275 kg that is Ø 0.367 m (550 kg). Length and spacing stay as drawn; the
+  frame is drawn on top of the larger pontoons, the strut length is still measured from the pontoon bottoms.
+
 ## What the sim shows (2026-11-24, with the cockpit box)
 
 At 0° the boat **does not fly**:
@@ -62,6 +75,9 @@ At 0° the boat **does not fly**:
    flap inside ±15° (surface effect at 1.5 chords costs about 35 % of the lift). At a 4–5° mount it would trim from
    about 8.5 m/s, but item 2 still stops it at 2.6 m/s.
 4. **Roll control is weak.** The flaps are 35 % of the span and next to the centreline.
+
+With the box **off** (Ø 0.367 m pontoons): at rest it floats half under but 11.5° nose-down (the same CG
+offset); under full thrust it runs level but stalls at 3.8 m/s, still far short of the 8 m/s cruise.
 
 Items 1–2 hinge on the assumed mass, CG and the placeholder hull drag: get the assembly's mass properties
 (SolidWorks → Tools → Evaluate → Mass Properties) before drawing conclusions from them.

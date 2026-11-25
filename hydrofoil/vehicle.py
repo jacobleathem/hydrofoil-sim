@@ -86,7 +86,8 @@ class VehiclePhysics:
     """
 
     def __init__(self, params: dict):
-        self.params = params
+        from hydrofoil.params import resolve_cad_hull
+        self.params = resolve_cad_hull(params)          # pontoons + cockpit box (CAD boat): apply the buoyancy toggle
         p = params
 
         # Hydrodynamic added mass (heave + pitch) from the vehicle's own

@@ -119,3 +119,32 @@ def test_cockpit_box_buoys_to_its_own_height_and_drags_when_wet():
 def test_cad_preset_has_the_cockpit_box():
     b = CAD_PARAMS["hull_boxes"][0]
     assert (b["length"], b["beam"], b["height"]) == pytest.approx((48 * 0.0254, 32 * 0.0254, 24 * 0.0254), abs=1e-3)
+
+
+def test_cockpit_toggle_off_scales_pontoons_to_hold_the_boat():
+    from hydrofoil.params import resolve_cad_hull
+    on = resolve_cad_hull(dict(CAD_PARAMS, cockpit_buoyancy=True))
+    off = resolve_cad_hull(dict(CAD_PARAMS, cockpit_buoyancy=False))
+    assert on["max_draft"] == pytest.approx(0.265) and len(on["hull_boxes"]) == 1
+    assert off["hull_boxes"] == []
+    cap = 2 * np.pi * (off["max_draft"] / 2) ** 2 * off["hull_length"] * 1025.0
+    assert cap == pytest.approx(off["pontoon_reserve"] * off["mass"], rel=1e-6)   # pontoons alone hold 2x the boat
+    assert resolve_cad_hull(dict(off))["max_draft"] == off["max_draft"]            # idempotent
+    heavy = resolve_cad_hull(dict(CAD_PARAMS, cockpit_buoyancy=False, mass=400.0))
+    assert heavy["max_draft"] > off["max_draft"]                                    # follows the mass
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        vp = VehiclePhysics(dict(CAD_PARAMS, cockpit_buoyancy=False, controller="pid"))
+    assert vp.hull.boxes == [] and vp.hull.max_draft == pytest.approx(off["max_draft"])
+
+
+def test_cockpit_toggle_reaches_viewer_and_dashboard():
+    mujoco = pytest.importorskip("mujoco")
+    pytest.importorskip("mujoco.viewer")
+    from hydrofoil.params import resolve_cad_hull
+    from hydrofoil.viewer import build_mjcf
+    from hydrofoil import sim_server
+    m = mujoco.MjModel.from_xml_string(build_mjcf(resolve_cad_hull(dict(CAD_PARAMS, cockpit_buoyancy=False))))
+    g = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_GEOM, "pontoon_0")
+    assert m.geom_size[g][0] == pytest.approx(0.5 * 0.3672, abs=2e-3)
+    assert 'name="cockpit_buoyancy"' in sim_server.page()

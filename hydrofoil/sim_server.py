@@ -39,6 +39,7 @@ _auto_saved_sig: tuple | None = None
 
 FIELDS = {   # name: (choices or None for free numeric, default)
     "preset": (("cad", "manned", "model"), "cad"),
+    "cockpit_buoyancy": (("on", "off"), "on"),
     "supervisor": (("off", "on"), "on"),
     "controller": (("auto", "lqr", "pid"), "auto"),
     "allocator": (("jacobian", "legacy"), "jacobian"),
@@ -52,6 +53,7 @@ FIELDS = {   # name: (choices or None for free numeric, default)
 
 LABELS = {
     "preset": "Boat",
+    "cockpit_buoyancy": "Cockpit box buoyancy (CAD boat)",
     "supervisor": "Supervisor",
     "controller": "Flight controller",
     "allocator": "Flap allocator",
@@ -107,6 +109,8 @@ def start(form: dict) -> None:
            "--wave-type", v["wave_type"]]
     if v["supervisor"] == "on":
         cmd.append("--supervisor")
+    if v["preset"] == "cad":
+        cmd += ["--cockpit-buoyancy", v["cockpit_buoyancy"]]
     if v["waves"] == "on":
         cmd.append("--waves")
     cmd += ["--duration", "36000", "--api-port", str(API_PORT)]
@@ -272,7 +276,9 @@ def page() -> str:
         choices, d = FIELDS[name]
         cur = last_form.get(name, d)
         from hydrofoil.params import PRESET_LABELS
-        labels = PRESET_LABELS if name == "preset" else {}
+        labels = (PRESET_LABELS if name == "preset" else
+                  {"on": "On (box floats)", "off": "Off (pontoons scaled to hold the boat)"} if name == "cockpit_buoyancy"
+                  else {})
         opts = "".join(f'<option value="{c}"{" selected" if c == cur else ""}>{html.escape(labels.get(c, c))}</option>'
                        for c in choices)
         return f'<label>{LABELS[name]}<select name="{name}">{opts}</select></label>'

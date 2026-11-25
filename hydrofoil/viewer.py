@@ -223,6 +223,7 @@ def build_mjcf(p: dict) -> str:
     <material name="flap" rgba="0.36 0.81 0.76 1" specular="0.5"/>
     <material name="water" rgba="0.09 0.36 0.44 0.42" specular="0.7" shininess="0.9"/>
     <material name="prop" rgba="0.15 0.17 0.19 0.55"/>
+    <material name="deck_dry" rgba="0.06 0.23 0.28 0.35"/>
     {cad["assets"] if cad else ""}
     <hfield name="water" nrow="{WATER_N}" ncol="{WATER_N}" size="{WATER_HALF} {WATER_HALF} {2 * WATER_RANGE} 0.02"/>
   </asset>
@@ -852,7 +853,8 @@ def _ensure_dashboard(api_port: int = 8766, port: int = 8765, open_browser: bool
 def run(speed: float = 1.0, wave_cfg: dict | None = None, duration: float = 600.0,
         controller: str | None = None, sensors: str | None = None, preset: str = "model", api_port: int = 8766, maximize: bool = True,
         overrides: dict | None = None, supervisor: bool = False,
-        safety_margin: str | None = None, allocator: str | None = None, wave_type: str | None = None):
+        safety_margin: str | None = None, allocator: str | None = None, wave_type: str | None = None,
+        cockpit_buoyancy: bool | None = None):
     from hydrofoil.design import apply_design
     from hydrofoil.monitor import FlightMonitor
     params = apply_design(preset_params(preset), overrides or {})
@@ -869,6 +871,10 @@ def run(speed: float = 1.0, wave_cfg: dict | None = None, duration: float = 600.
         params["allocator"] = str(allocator).lower()
     if wave_type:
         params["wave_type"] = str(wave_type).lower()
+    if cockpit_buoyancy is not None and "cockpit_box" in params:
+        from hydrofoil.params import resolve_cad_hull
+        params["cockpit_buoyancy"] = bool(cockpit_buoyancy)
+        resolve_cad_hull(params)
     if wave_cfg:
         params.update(wave_cfg)
     else:
@@ -1185,12 +1191,15 @@ def main():
                     help="Physics x Control safety envelope preset (default: standard)")
     ap.add_argument("--allocator", choices=("jacobian", "legacy"),
                     help="control surface allocator (default: jacobian)")
+    ap.add_argument("--cockpit-buoyancy", choices=("on", "off"),
+                    help="CAD boat: on = the cockpit box floats; off = no box buoyancy, pontoons scaled to hold the boat")
     a = ap.parse_args()
     wave_cfg = (dict(wave_amplitude=0.15, wave_wavelength=10.0, wave_direction=a.wave_dir) if a.preset in ("manned", "cad")
                 else dict(wave_amplitude=0.05, wave_wavelength=5.0, wave_direction=a.wave_dir)) if a.waves else None
     run(speed=a.speed, wave_cfg=wave_cfg, duration=a.duration, controller=a.controller, sensors=a.sensors,
         preset=a.preset, api_port=a.api_port, maximize=not a.windowed, supervisor=a.supervisor,
         safety_margin=a.safety_margin, allocator=a.allocator, wave_type=a.wave_type,
+        cockpit_buoyancy=None if a.cockpit_buoyancy is None else a.cockpit_buoyancy == "on",
         overrides=json.loads(Path(a.overrides).read_text()) if a.overrides and Path(a.overrides).exists() else None)
 
 

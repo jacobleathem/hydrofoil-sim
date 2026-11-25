@@ -216,13 +216,19 @@ CAD_PARAMS.update({
     # Two streamlined front masts (0.28 m chord, 51 mm thick) at +-0.35 m, one 0.10 m rear mast on the centreline.
     "main_strut_chord": 0.28, "main_strut_count": 2, "main_strut_y": 0.35, "elev_strut_chord": 0.10,
     # Twin pontoons: 2.54 m long, 265 mm diameter, 1.308 m apart, centred 0.483 m aft of the CG. Modelled as
-    # wall-sided hulls of equal volume (beam = pi/4 x 0.265 m) with the full diameter as draft.
-    "hull_offset": -0.35, "hull_length": 2.54, "hull_beam": 0.208, "hull_twin_spacing": 1.308, "hull_x": -0.483,
-    "max_draft": 0.265,
+    # wall-sided hulls of equal volume (beam = pi/4 x diameter) with the full diameter as draft; hull_beam,
+    # max_draft and hull_boxes are filled in by resolve_cad_hull() below.
+    "hull_offset": -0.35, "hull_length": 2.54, "hull_twin_spacing": 1.308, "hull_x": -0.483,
+    "pontoon_diameter": 0.265,
     # Cockpit: a sealed 48 x 32 x 24 in box (1.219 x 0.813 x 0.610 m, 0.605 m^3, ~620 kg of buoyancy when fully
     # under) centred in the frame between the pontoons, its bottom level with the pontoon bottoms. 1.219 m along the
     # boat. Its water drag is a flat-faced box (C_D 1) on whatever is submerged.
-    "hull_boxes": [{"name": "cockpit", "x": -0.347, "y": 0.0, "length": 1.219, "beam": 0.813, "height": 0.610}],
+    "cockpit_box": {"name": "cockpit", "x": -0.347, "y": 0.0, "length": 1.219, "beam": 0.813, "height": 0.610},
+    # Toggle (dashboard "Cockpit box buoyancy"): True = the box floats (and drags) as above. False = the box is out of
+    # the water calculation and the pontoon DIAMETER is scaled so the pontoons alone hold the boat with
+    # pontoon_reserve x its weight when fully under (2.0 = floats with the pontoons about half under, a common
+    # pontoon-boat rule; never smaller than the CAD diameter). Length and spacing stay as drawn.
+    "cockpit_buoyancy": True, "pontoon_reserve": 2.0,
     # Wing 0.40 m (1.5 chords) under the surface when the pontoons are 0.35 m clear.
     "flying_height": 0.35,
     # Two propellers (about 0.21 m diameter) on the front masts, 0.386 m aft of and 0.96 m below the CG: the thrust
@@ -236,6 +242,31 @@ CAD_PARAMS.update({
     "lqr_speeds": (15.5, 15.62, 15.75, 15.88, 16.0), "lqr_engage_speed": 15.8, "est_engage_speed": 15.5,
     "trim_ff_deg": 13.54, "trim_ff_speed": 16.0,
 })
+
+def resolve_cad_hull(p: dict[str, Any]) -> dict[str, Any]:
+    """Fill hull_beam / max_draft / hull_boxes of a boat that describes its hull as pontoons + a cockpit box
+    (the CAD preset), according to the cockpit_buoyancy toggle. Idempotent; other presets are returned unchanged.
+    Modifies and returns p."""
+    import math
+    if "pontoon_diameter" not in p:
+        return p
+    d_cad = float(p["pontoon_diameter"])
+    box = p.get("cockpit_box")
+    if p.get("cockpit_buoyancy", True):
+        d, boxes = d_cad, ([dict(box)] if box else [])
+    else:
+        # two cylinders of length L hold reserve x mass when fully under: 2 * pi d^2 / 4 * L * rho = reserve * m
+        need = float(p.get("pontoon_reserve", 2.0)) * float(p["mass"])
+        d = max(d_cad, math.sqrt(2.0 * need / (math.pi * float(p["hull_length"]) * 1025.0)))
+        boxes = []
+    p["pontoon_diameter_used"] = round(d, 4)
+    p["max_draft"] = d
+    p["hull_beam"] = math.pi / 4.0 * d          # wall-sided equivalent: same volume as the cylinder
+    p["hull_boxes"] = boxes
+    return p
+
+
+resolve_cad_hull(CAD_PARAMS)
 
 PRESETS: dict[str, dict[str, Any]] = {"model": DEFAULT_PARAMS, "manned": MANNED_PARAMS, "cad": CAD_PARAMS}
 PRESET_LABELS = {"cad": "Our boat (CAD)", "manned": "Manned (Josh's sizing)", "model": "25 kg model"}

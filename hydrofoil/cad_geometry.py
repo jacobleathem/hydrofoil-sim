@@ -66,14 +66,14 @@ def cad_parts(p: dict) -> dict:
     strut_y = float(p.get("main_strut_y", 0.35))
     sy = float(p["main_span"]) / CAD_HALF_SPAN                       # boat-editor scaling of the drawn planform
     sx = float(p["main_chord"]) / CAD_MEAN_CHORD
-    frame_z = hull_bot + FRAME_Z
+    frame_z = hull_bot + 2 * r                      # the frame sits on top of the pontoons (CAD: 0.265 m)
     assets, geoms = [], []
 
     # pontoons, deck frame, cockpit
     for i, y in enumerate((spacing / 2, -spacing / 2)):
         geoms.append(f'<geom name="pontoon_{i}" type="capsule" fromto="{_f(hx - L / 2 + r)} {_f(y)} {_f(hull_bot + r)} '
                      f'{_f(hx + L / 2 - r)} {_f(y)} {_f(hull_bot + r)}" size="{_f(r)}" material="hull" contype="0" conaffinity="0"/>')
-    bz = hull_bot + BEAM_Z
+    bz = frame_z + (BEAM_Z - FRAME_Z)
     for i, dx in enumerate(CROSS_BEAMS_DX):
         geoms.append(f'<geom name="cross_beam_{i}" type="box" size="0.051 {_f(spacing / 2 + 0.1)} 0.076" '
                      f'pos="{_f(hx + dx)} 0 {_f(bz)}" material="strut" contype="0" conaffinity="0"/>')
@@ -84,7 +84,7 @@ def cad_parts(p: dict) -> dict:
     for i, s in enumerate((1, -1)):
         geoms.append(f'<geom name="rear_boom_{i}" type="capsule" fromto="{_f(hx + bx0)} {_f(s * by0)} {_f(bz)} '
                      f'{_f(hx + bx1)} {_f(s * by1)} {_f(bz)}" size="0.045" material="strut" contype="0" conaffinity="0"/>')
-    boxes = p.get("hull_boxes") or []
+    boxes = [p["cockpit_box"]] if p.get("cockpit_box") else (p.get("hull_boxes") or [])
     if not boxes:                                   # the CAD's own (unfinished) cockpit shape
         cx, cy, cz = COCKPIT["size"]
         geoms.append(f'<geom name="cockpit" type="box" size="{_f(cx / 2)} {_f(cy / 2)} {_f(cz / 2)}" '
@@ -93,7 +93,7 @@ def cad_parts(p: dict) -> dict:
         geoms.append(f'<geom name="{"cockpit" if i == 0 else f"box_{i}"}" type="box" '
                      f'size="{_f(b["length"] / 2)} {_f(b["beam"] / 2)} {_f(b["height"] / 2)}" '
                      f'pos="{_f(b.get("x", 0.0))} {_f(-float(b.get("y", 0.0)))} {_f(hull_bot + b["height"] / 2)}" '
-                     f'material="deck" contype="0" conaffinity="0"/>')
+                     f'material="{"deck" if p.get("cockpit_buoyancy", True) else "deck_dry"}" contype="0" conaffinity="0"/>')
 
     # two front masts with motor pods and propellers, one rear mast
     mast_len = frame_z + mz

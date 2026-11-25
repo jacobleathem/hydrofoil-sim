@@ -272,6 +272,8 @@ def apply_design(p: dict, overrides: dict) -> dict:
             ov_flags["strut_length"] = True
         _scale_inertias_and_hull(old, p, ov_flags)
         _scale_structures_drives_and_gains(old, p, ov_flags)
+    from hydrofoil.params import resolve_cad_hull
+    resolve_cad_hull(p)                         # pontoon size follows mass edits when the cockpit box is off
     if overrides and (TRIM_EDIT_KEYS & set(overrides)):
         _reschedule(p)
     return p
