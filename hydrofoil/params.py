@@ -219,6 +219,10 @@ CAD_PARAMS.update({
     # wall-sided hulls of equal volume (beam = pi/4 x 0.265 m) with the full diameter as draft.
     "hull_offset": -0.35, "hull_length": 2.54, "hull_beam": 0.208, "hull_twin_spacing": 1.308, "hull_x": -0.483,
     "max_draft": 0.265,
+    # Cockpit: a sealed 48 x 32 x 24 in box (1.219 x 0.813 x 0.610 m, 0.605 m^3, ~620 kg of buoyancy when fully
+    # under) centred in the frame between the pontoons, its bottom level with the pontoon bottoms. 1.219 m along the
+    # boat. Its water drag is a flat-faced box (C_D 1) on whatever is submerged.
+    "hull_boxes": [{"name": "cockpit", "x": -0.347, "y": 0.0, "length": 1.219, "beam": 0.813, "height": 0.610}],
     # Wing 0.40 m (1.5 chords) under the surface when the pontoons are 0.35 m clear.
     "flying_height": 0.35,
     # Two propellers (about 0.21 m diameter) on the front masts, 0.386 m aft of and 0.96 m below the CG: the thrust

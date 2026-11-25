@@ -127,11 +127,16 @@ class HullHydrostatics:
 
     The footprint is a rectangle (length x beam, centred at x_center), a placeholder. With twin_spacing > 0 it is
     two such rectangles (catamaran pontoons, each `beam` wide) centred at y = +-twin_spacing / 2.
+
+    `boxes` adds other buoyant volumes whose bottom is level with the hull bottom (e.g. a cockpit box sitting
+    between the pontoons): each {"x", "y", "length", "beam", "height"} [m, body x forward / y starboard, centre of
+    the footprint]. Their cells buoy up to their own height. The hull's `mean_draft` (drag, foilborne detection)
+    stays the main hull's; the boxes' water drag comes from `box_drag`.
     """
 
     def __init__(self, length: float, beam: float, x_center: float, hull_offset: float,
                  max_draft: float, nx: int = 11, ny: int = 7,
-                 rho: float = RHO_WATER, g: float = G, twin_spacing: float = 0.0):
+                 rho: float = RHO_WATER, g: float = G, twin_spacing: float = 0.0, boxes=()):
         length = max(float(length), 1e-3)
         beam = max(float(beam), 1e-3)
         max_draft = max(float(max_draft), 0.0)
@@ -143,13 +148,32 @@ class HullHydrostatics:
         if n_hulls == 2:
             ys = np.concatenate([ys - 0.5 * float(twin_spacing), ys + 0.5 * float(twin_spacing)])
         X, Y = np.meshgrid(xs, ys, indexing="ij")
-        self.xy = np.stack([X.ravel(), Y.ravel()], axis=1)                       # (N, 2)
+        xy = [np.stack([X.ravel(), Y.ravel()], axis=1)]
+        n_main = len(xy[0])
+        dA = [np.full(n_main, length * beam / (nx * ny))]
+        cap = [np.full(n_main, max_draft)]
+        self.boxes = []
+        for b in boxes or ():
+            bl, bb, bh = max(float(b["length"]), 1e-3), max(float(b["beam"]), 1e-3), max(float(b["height"]), 0.0)
+            bnx, bny = 8, 6
+            bxs = float(b.get("x", 0.0)) + ((np.arange(bnx) + 0.5) / bnx - 0.5) * bl
+            bys = float(b.get("y", 0.0)) + ((np.arange(bny) + 0.5) / bny - 0.5) * bb
+            BX, BY = np.meshgrid(bxs, bys, indexing="ij")
+            i0 = sum(len(a) for a in xy)
+            xy.append(np.stack([BX.ravel(), BY.ravel()], axis=1))
+            dA.append(np.full(bnx * bny, bl * bb / (bnx * bny)))
+            cap.append(np.full(bnx * bny, bh))
+            self.boxes.append({"name": str(b.get("name", "box")), "slice": slice(i0, i0 + bnx * bny),
+                               "length": bl, "beam": bb, "height": bh})
+        self.xy = np.concatenate(xy)                                              # (N, 2)
         self.bottom = np.column_stack([self.xy, np.full(len(self.xy), -hull_offset)])   # (N, 3) body coords
         self.xy0 = self.xy.copy()
         self.bottom0 = self.bottom.copy()
         self.n_hulls = n_hulls
-        self.dA = length * beam / (nx * ny)
-        self.waterplane_area = n_hulls * length * beam
+        self.n_main = n_main                                # main-hull cells come first
+        self.dA = np.concatenate(dA)                        # (N,) cell areas
+        self.cell_max_draft = np.concatenate(cap)           # (N,) draft at which each cell is fully under
+        self.waterplane_area = n_hulls * length * beam + sum(b["length"] * b["beam"] for b in self.boxes)
         self.hull_offset = float(hull_offset)
         self.hull_offset0 = float(hull_offset)
         self.max_draft = max_draft
@@ -172,16 +196,17 @@ class HullHydrostatics:
         """Per-cell draft [m]; surface_z is the NED z of the surface under each cell (scalar or (N,))."""
         R = R_body_to_ned(eta[3], eta[4], eta[5])
         z_bottom = eta[2] + self.bottom @ R[2]
-        return np.clip(z_bottom - surface_z, 0.0, self.max_draft)
+        return np.clip(z_bottom - surface_z, 0.0, self.cell_max_draft)
 
     def mean_draft(self, eta, surface_z) -> float:
-        return float(np.mean(self.drafts(eta, surface_z)))
+        """Mean draft of the main hull (pontoons) only."""
+        return float(np.mean(self.drafts(eta, surface_z)[:self.n_main]))
 
     def buoyancy(self, eta, surface_z) -> np.ndarray:
         """6-vector [Fx Fy Fz Mx My Mz] in the body frame about the CoG."""
         R = R_body_to_ned(eta[3], eta[4], eta[5])
         r2 = R[2]                                           # NED-z row: f_body = -F * r2
-        d = np.clip(eta[2] + self.bottom @ r2 - surface_z, 0.0, self.max_draft)
+        d = np.clip(eta[2] + self.bottom @ r2 - surface_z, 0.0, self.cell_max_draft)
         F = self.rho * self.g * self.dA * d                 # (N,)
         px, py = self.xy[:, 0], self.xy[:, 1]
         pz = -(self.hull_offset + 0.5 * d)                  # centroid of each submerged column
@@ -192,6 +217,28 @@ class HullHydrostatics:
         tau = np.zeros(6)
         tau[:3] = -np.sum(F) * r2
         tau[3:] = (mx, my, mz)
+        return tau
+
+    def box_drag(self, nu, eta, surface_z, cd: float = 1.0) -> np.ndarray:
+        """Bluff-body water drag of the extra boxes (a flat-faced box pushed through the water, C_D ~ 1 on the
+        submerged frontal / side area), applied at each box's submerged centroid. Zero when they are dry."""
+        tau = np.zeros(6)
+        if not self.boxes:
+            return tau
+        d_all = self.drafts(eta, surface_z)
+        for b in self.boxes:
+            d = float(np.mean(d_all[b["slice"]]))
+            if d <= 0.0:
+                continue
+            fx = -0.5 * self.rho * cd * b["beam"] * d * nu[0] * abs(nu[0])
+            fy = -0.5 * self.rho * cd * b["length"] * d * nu[1] * abs(nu[1])
+            cx, cy = np.mean(self.xy[b["slice"]], axis=0)
+            cz = -(self.hull_offset + 0.5 * d)
+            tau[0] += fx
+            tau[1] += fy
+            tau[3] += -cz * fy
+            tau[4] += cz * fx
+            tau[5] += cx * fy - cy * fx
         return tau
 
     def drag(self, nu, mean_draft: float, drag_coeff: float, rot_damping: float = 0.0,

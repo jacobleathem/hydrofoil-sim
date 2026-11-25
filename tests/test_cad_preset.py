@@ -99,3 +99,23 @@ def test_dashboard_offers_the_cad_boat():
     info = sim_server.design_info("cad")
     assert info["base"]["main_incidence_deg"] == 0.0 and info["geom"]["hull_twin_spacing"] > 0
     assert 'value="cad"' in sim_server.page() and 'id="loadCad"' in sim_server.page()
+
+
+def test_cockpit_box_buoys_to_its_own_height_and_drags_when_wet():
+    box = {"name": "cockpit", "x": 0.0, "y": 0.0, "length": 1.219, "beam": 0.813, "height": 0.610}
+    hull = HullHydrostatics(2.54, 0.208, 0.0, 0.35, 0.265, twin_spacing=1.308, boxes=[box])
+    assert hull.waterplane_area == pytest.approx(2 * 2.54 * 0.208 + 1.219 * 0.813)
+    deep = np.array([0.0, 0.0, 0.35 + 0.50, 0.0, 0.0, 0.0])          # 0.50 m deep: pontoons under, box not yet
+    f_box = 1025 * 9.81 * 1.219 * 0.813 * 0.50
+    f_pont = 1025 * 9.81 * 2 * 2.54 * 0.208 * 0.265
+    assert -hull.buoyancy(deep, 0.0)[2] == pytest.approx(f_box + f_pont, rel=1e-9)
+    assert hull.mean_draft(deep, 0.0) == pytest.approx(0.265)        # main-hull draft only
+    nu = np.array([3.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+    assert hull.box_drag(nu, deep, 0.0)[0] == pytest.approx(-0.5 * 1025 * 0.813 * 0.50 * 9.0)
+    dry = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])                    # hull 0.35 m above the water
+    assert np.allclose(hull.box_drag(nu, dry, 0.0), 0.0)
+
+
+def test_cad_preset_has_the_cockpit_box():
+    b = CAD_PARAMS["hull_boxes"][0]
+    assert (b["length"], b["beam"], b["height"]) == pytest.approx((48 * 0.0254, 32 * 0.0254, 24 * 0.0254), abs=1e-3)

@@ -24,6 +24,7 @@ CAD → body: `x = (X_cad − 1716 mm)` forward, `z_down = (863 mm − Y_cad)`.
 | Front masts | two, ±0.35 m, 0.28 m chord, 51 mm thick | `main_strut_count` 2, `main_strut_y`, `main_strut_chord` |
 | Rear mast | one, centreline, 102 × 76 mm | `elev_strut_chord` 0.10 |
 | Hull | twin pontoons, 2.54 m × Ø0.265 m, 1.308 m apart, centre 0.483 m aft of the main wing | `hull_twin_spacing`, `hull_length`, `hull_beam` 0.208 (= π/4 × Ø, same volume), `max_draft` 0.265, `hull_x` |
+| Cockpit box | sealed 48 × 32 × 24 in (1.219 × 0.813 × 0.610 m, 0.605 m³ ≈ 620 kg buoyancy), centred in the frame (0.347 m aft of the main wing), bottom level with the pontoon bottoms | `hull_boxes` |
 | Propellers | two, Ø ≈ 0.21 m, 0.386 m aft of and 0.139 m above the main wing | `prop_pos_z` 0.96 (thrust line below the CG) |
 
 ## Assumed (not in the STL: it has no mass)
@@ -40,24 +41,27 @@ CAD → body: `x = (X_cad − 1716 mm)` forward, `z_down = (863 mm − Y_cad)`.
   arm; ours is about 0.39× of a flap centred on the half.
 * `HullHydrostatics(twin_spacing=…)`: catamaran footprint (supervisor clearances use the outer pontoon edge).
 * `main_strut_count`: the two front masts.
+* `HullHydrostatics(boxes=…)`: extra buoyant boxes (the cockpit) with their own height, plus `box_drag`, a
+  flat-faced box's water drag (C_D 1 on the submerged face) so the buoyancy doesn't come for free.
 * `VehiclePhysics.set_main_incidence()` and the viewer's **Main wing mounting angle** slider: physics changes at
   once; trim feed-forward and LQR are re-derived in the background (PID flies meanwhile).
 * The LQR skips speeds where the boat has no level trim inside the surface limits, and falls back to the PID loops
   (with a dashboard message) if there are none.
 
-## What the sim shows (2026-11-24)
+## What the sim shows (2026-11-24, with the cockpit box)
 
 At 0° the boat **does not fly**:
 
-1. **It cannot float level at rest.** 275 kg is 96 % of the pontoons' full volume (287 kg), and the assumed CG is
-   0.48 m ahead of their centre, so the bows go under (pitch −70° after 30 s with no thrust). The pontoon model
-   checks out: 150 kg centred over them floats level at the expected 0.138 m draft.
-2. **Under power it stalls at 2.1 m/s** against the hull's drag hump with the pontoons fully submerged, then
-   nose-dives.
+1. **At rest it noses under** (pitch −70° after 30 s, no thrust). The pontoons + box hold 900 kg, so it is not
+   too heavy any more, but the assumed CG (over the main wing) is 0.48 m ahead of where they hold it up. With the
+   CG 0.25 m ahead it rests at −4.6°; over the pontoon centre at +1.6°. A foiler wants the CG near the main wing; a
+   floating boat wants it over its buoyancy: the layout puts those 0.48 m apart.
+2. **Under power it floats level but stalls at 2.5 m/s** with full thrust (1000 N), pontoons 0.13 m deep and the
+   cockpit box ploughing (the hull drag hump plus the box's own drag).
 3. **Even ignoring the hull, the wing is too small/too shallow at 0°.** Level trim needs about 15.5 m/s with the
    flap inside ±15° (surface effect at 1.5 chords costs about 35 % of the lift). At a 4–5° mount it would trim from
-   about 8.5 m/s.
+   about 8.5 m/s, but item 2 still stops it at 2.6 m/s.
 4. **Roll control is weak.** The flaps are 35 % of the span and next to the centreline.
 
-Items 1–2 hinge on the assumed mass and CG: get the assembly's mass properties (SolidWorks → Tools → Evaluate →
-Mass Properties) before drawing conclusions from them.
+Items 1–2 hinge on the assumed mass, CG and the placeholder hull drag: get the assembly's mass properties
+(SolidWorks → Tools → Evaluate → Mass Properties) before drawing conclusions from them.

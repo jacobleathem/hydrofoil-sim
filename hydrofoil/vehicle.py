@@ -116,7 +116,8 @@ class VehiclePhysics:
         # Distributed hull hydrostatics (cross-referenced against Fossen ch.4 GM_T / GM_L, see docs/15).
         self.hull = HullHydrostatics(p["hull_length"], p["hull_beam"], p["hull_x"],
                                      p["hull_offset"], p["max_draft"],
-                                     twin_spacing=float(p.get("hull_twin_spacing", 0.0) or 0.0))
+                                     twin_spacing=float(p.get("hull_twin_spacing", 0.0) or 0.0),
+                                     boxes=p.get("hull_boxes") or ())
         self.waterplane_area = self.hull.waterplane_area
         self.rigid_body = RigidBody(
             mass=p["mass"], I_b=np.diag([p["ixx"], p["iyy"], p["izz"]]),
@@ -844,6 +845,7 @@ class VehiclePhysics:
         tau += foil_force("elev", cmds["delta_elev"], downwash=self._eps_used)
         tau += self.hull.buoyancy(eta, env.hull_cell_surface_z)
         tau += gravity_force(p["mass"], eta)
+        tau += self.hull.box_drag(nu, eta, env.hull_cell_surface_z)
         tau += self.hull.drag(nu, self.hull.mean_draft(eta, env.hull_cell_surface_z),
                               p["hull_drag_coeff"], p["hull_rot_damping"],
                               hull_length=p["hull_length"], hump_amp=p.get("hull_hump_amp", 0.8))
