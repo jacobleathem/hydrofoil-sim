@@ -128,9 +128,9 @@ class HullHydrostatics:
     The footprint is a rectangle (length x beam, centred at x_center), a placeholder. With twin_spacing > 0 it is
     two such rectangles (catamaran pontoons, each `beam` wide) centred at y = +-twin_spacing / 2.
 
-    `boxes` adds other buoyant volumes whose bottom is level with the hull bottom (e.g. a cockpit box sitting
-    between the pontoons): each {"x", "y", "length", "beam", "height"} [m, body x forward / y starboard, centre of
-    the footprint]. Their cells buoy up to their own height. The hull's `mean_draft` (drag, foilborne detection)
+    `boxes` adds other buoyant volumes (e.g. a cockpit box sitting between the pontoons): each {"x", "y", "length",
+    "beam", "height"} [m, body x forward / y starboard, centre of the footprint] and optionally "bottom", the height
+    of the box's bottom above the hull bottom (default 0 = level with it). Their cells buoy up to their own height. The hull's `mean_draft` (drag, foilborne detection)
     stays the main hull's; the boxes' water drag comes from `box_drag`.
     """
 
@@ -152,6 +152,7 @@ class HullHydrostatics:
         n_main = len(xy[0])
         dA = [np.full(n_main, length * beam / (nx * ny))]
         cap = [np.full(n_main, max_draft)]
+        lift = [np.zeros(n_main)]                            # each cell's bottom height above the hull bottom
         self.boxes = []
         for b in boxes or ():
             bl, bb, bh = max(float(b["length"]), 1e-3), max(float(b["beam"]), 1e-3), max(float(b["height"]), 0.0)
@@ -163,10 +164,11 @@ class HullHydrostatics:
             xy.append(np.stack([BX.ravel(), BY.ravel()], axis=1))
             dA.append(np.full(bnx * bny, bl * bb / (bnx * bny)))
             cap.append(np.full(bnx * bny, bh))
+            lift.append(np.full(bnx * bny, max(float(b.get("bottom", 0.0)), 0.0)))
             self.boxes.append({"name": str(b.get("name", "box")), "slice": slice(i0, i0 + bnx * bny),
-                               "length": bl, "beam": bb, "height": bh})
+                               "length": bl, "beam": bb, "height": bh, "bottom": float(lift[-1][0])})
         self.xy = np.concatenate(xy)                                              # (N, 2)
-        self.bottom = np.column_stack([self.xy, np.full(len(self.xy), -hull_offset)])   # (N, 3) body coords
+        self.bottom = np.column_stack([self.xy, -hull_offset - np.concatenate(lift)])    # (N, 3) body coords
         self.xy0 = self.xy.copy()
         self.bottom0 = self.bottom.copy()
         self.n_hulls = n_hulls
@@ -209,7 +211,7 @@ class HullHydrostatics:
         d = np.clip(eta[2] + self.bottom @ r2 - surface_z, 0.0, self.cell_max_draft)
         F = self.rho * self.g * self.dA * d                 # (N,)
         px, py = self.xy[:, 0], self.xy[:, 1]
-        pz = -(self.hull_offset + 0.5 * d)                  # centroid of each submerged column
+        pz = self.bottom[:, 2] - 0.5 * d                    # centroid of each submerged column (body z down)
         # moment = sum p_i x (-F_i r2)
         mx = -np.sum(F * (py * r2[2] - pz * r2[1]))
         my = -np.sum(F * (pz * r2[0] - px * r2[2]))
@@ -233,7 +235,7 @@ class HullHydrostatics:
             fx = -0.5 * self.rho * cd * b["beam"] * d * nu[0] * abs(nu[0])
             fy = -0.5 * self.rho * cd * b["length"] * d * nu[1] * abs(nu[1])
             cx, cy = np.mean(self.xy[b["slice"]], axis=0)
-            cz = -(self.hull_offset + 0.5 * d)
+            cz = float(np.mean(self.bottom[b["slice"], 2])) - 0.5 * d
             tau[0] += fx
             tau[1] += fy
             tau[3] += -cz * fy

@@ -29,10 +29,34 @@ CAD → body: `x = (X_cad − 1716 mm)` forward, `z_down = (863 mm − Y_cad)`.
 | Cockpit box | sealed 48 × 32 × 24 in (1.219 × 0.813 × 0.610 m, 0.605 m³ ≈ 620 kg buoyancy), centred in the frame (0.347 m aft of the main wing), bottom level with the pontoon bottoms | `cockpit_box` |
 | Propellers | two, Ø ≈ 0.21 m, 0.386 m aft of and 0.139 m above the main wing | `prop_pos_z` 0.96 (thrust line below the CG) |
 
-## Assumed (not in the STL: it has no mass)
+## Mass and CG (2026-11-26, from SolidWorks mass properties, rough estimate)
 
-* **Mass 275 kg** and inertias: the manned preset's placeholders.
-* **CG** longitudinally over the main wing's quarter chord, 0.35 m above the pontoon bottoms.
+Set up in `Hydrofoil Assembly+wings_not_finished.SLDASM` (backups: `... BACKUP 2026-11-26` folders next to it):
+every structural part and the original cockpit **6061 aluminium**; pontoons **hollow HDPE** (6 mm Shell feature,
+11.3 kg each); motors **7 lb** and propellers **2 lb** each (mass overrides); a **50 lb battery placeholder**
+(`Battery placeholder 50lb.SLDPRT`, 300 x 200 x 140 mm solid aluminium block) just behind the rear cross beam,
+inside the triangle that holds the rear mast. SolidWorks: **247.6 kg**.
+
+Added in the sim only: **35 lb** (15.9 kg) of actuators, cables and cockpit fit-out, spread like the boat (same CG,
+inertia scaled), and a **150 lb driver**, assumed seated mid-cockpit (CAD X 1.20 m) 0.25 m above its floor.
+
+| | |
+|---|---|
+| Total | **331.6 kg (731 lb)** |
+| CG (CAD) | X 1.139, Y 0.616, Z 1.302 m |
+| CG vs main wing | **0.577 m behind** its quarter chord: the rear wing carries ~24 % of the weight |
+| CG height | 0.103 m above the pontoon bottoms (the masts and wing hang low) |
+| Inertia about CG (roll / pitch / yaw) | 83.4 / 212.9 / 203.1 kg m² (products ignored, Ixz ≈ −25) |
+
+Heaviest items: cockpit 39 kg, battery 22.7 kg, each front mast 16.8 kg (modelled as a **solid** bar; a 4 × 2 × ¼ in
+tube is about a quarter of that), each I-beam ~11.5 kg, the "foam" mast fairings 10.4 kg per mast at aluminium
+density (lighter if they really are foam).
+
+Cockpit: the CAD's own tub (1.405 × 0.705 × 0.319 m, bottom 0.101 m above the pontoon bottoms) replaces the
+48 × 32 × 24 in box (`cockpit_box` now has an optional `bottom` height).
+
+## Still assumed
+
 * Elevator pivot (22 % chord; the rear mast is at 49 %), flap and elevator travel, drive train, hull drag: manned values.
 * Flying height 0.35 m (wing 0.40 m = 1.5 chords deep).
 * Controllers: the manned preset's PID gains and LQR weights, unchanged.
@@ -81,3 +105,22 @@ offset); under full thrust it runs level but stalls at 3.8 m/s, still far short 
 
 Items 1–2 hinge on the assumed mass, CG and the placeholder hull drag: get the assembly's mass properties
 (SolidWorks → Tools → Evaluate → Mass Properties) before drawing conclusions from them.
+
+## What the sim shows with the real mass (2026-11-26)
+
+* **At rest** it floats nearly level: +3.7° bow-up with the cockpit tub counted (pontoons 0.21 m deep, the tub
+  0.11 m in the water), +2.0° with the toggle off. The two CAD pontoons alone (2 × 120 L ≈ 246 kg) can't hold
+  331.6 kg; the tub carries the rest.
+* **Slowest level flight** (flap inside ±15°): 14.5 m/s at the CAD's 0° mount, 9.0 m/s at 3°, **7.5 m/s at 5°**
+  (flap +7° at 8 m/s).
+* **Full-throttle runs, 90 s, calm water, 1000 N placeholder thrust:**
+
+| Cockpit in the water? | Mount | Result |
+|---|---|---|
+| yes (CAD) | 0° | stuck at 2.2 m/s, bow up 20° |
+| yes (CAD) | 5° | stuck at 2.3 m/s, bow up 13° |
+| **no** (toggle off: pontoons scaled to Ø 0.40 m) | **5°** | **takes off, holds 8.00 m/s level on ~252 N** |
+
+So with the real mass the wing works at a 5° mount; what stops the boat is the cockpit tub dragging in the water.
+Fix: pontoons big enough to hold the boat on their own (~2 × 330 L for 2× reserve) or the cockpit floor raised
+clear of the water.

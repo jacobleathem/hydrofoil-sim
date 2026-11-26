@@ -92,7 +92,7 @@ def cad_parts(p: dict) -> dict:
     for i, b in enumerate(boxes):                   # buoyant boxes (cockpit), bottom level with the pontoon bottoms
         geoms.append(f'<geom name="{"cockpit" if i == 0 else f"box_{i}"}" type="box" '
                      f'size="{_f(b["length"] / 2)} {_f(b["beam"] / 2)} {_f(b["height"] / 2)}" '
-                     f'pos="{_f(b.get("x", 0.0))} {_f(-float(b.get("y", 0.0)))} {_f(hull_bot + b["height"] / 2)}" '
+                     f'pos="{_f(b.get("x", 0.0))} {_f(-float(b.get("y", 0.0)))} {_f(hull_bot + float(b.get("bottom", 0.0)) + b["height"] / 2)}" '
                      f'material="{"deck" if p.get("cockpit_buoyancy", True) else "deck_dry"}" contype="0" conaffinity="0"/>')
 
     # two front masts with motor pods and propellers, one rear mast

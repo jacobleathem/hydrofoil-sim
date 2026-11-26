@@ -112,6 +112,19 @@ results, we need from SolidWorks (**Tools → Evaluate → Mass Properties**, wi
 Also still placeholders: thrust (1000 N), hull drag, the rear wing's pivot point and travel, flap travel, and the
 controller gains (Josh's, tuned for his boat).
 
+## 4b. Update 2026-11-26: real(ish) mass from SolidWorks
+
+We set materials in SolidWorks (aluminium structure and cockpit, hollow plastic pontoons, 7 lb motors, 2 lb props, a
+50 lb battery block behind the cockpit) and added 35 lb of actuators/cables and a 150 lb driver: **331.6 kg (731 lb)**,
+CG **0.58 m behind the main wing**, 0.10 m above the pontoon bottoms. Details in docs/26.
+
+* It now **floats nearly level** (+2 to +4° bow-up), not nose-under.
+* At a **5° wing mount** it can fly level from **7.5 m/s**.
+* **With the cockpit tub out of the water it takes off and cruises at 8 m/s on ~250 N.** With the tub in the water
+  (as drawn) it is stuck at ~2.3 m/s: the tub ploughs.
+* Our pontoons (2 × 120 L) can't hold 331 kg on their own; they need to be about **2 × 330 L** (Ø ≈ 0.40 m at
+  2.54 m) for the tub to stay dry.
+
 ## 5. Suggested next steps for the CAD
 
 1. Get mass properties and put them in the sim.

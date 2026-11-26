@@ -116,9 +116,23 @@ def test_cockpit_box_buoys_to_its_own_height_and_drags_when_wet():
     assert np.allclose(hull.box_drag(nu, dry, 0.0), 0.0)
 
 
-def test_cad_preset_has_the_cockpit_box():
+def test_cad_preset_has_the_cockpit_tub_and_measured_mass():
     b = CAD_PARAMS["hull_boxes"][0]
-    assert (b["length"], b["beam"], b["height"]) == pytest.approx((48 * 0.0254, 32 * 0.0254, 24 * 0.0254), abs=1e-3)
+    assert (b["length"], b["beam"], b["height"], b["bottom"]) == pytest.approx((1.405, 0.705, 0.319, 0.101), abs=1e-3)
+    lb = 0.45359237
+    assert CAD_PARAMS["mass"] == pytest.approx(247.6 + 35 * lb + 150 * lb, abs=0.2)      # SolidWorks + misc + driver
+    names = {q["name"]: q["mass"] for q in CAD_PARAMS["default_payloads"]}
+    assert names == pytest.approx({"Rider": 150 * lb, "Battery": 50 * lb}, abs=0.01)
+
+
+def test_raised_box_bottom_floats_higher():
+    flat = {"name": "b", "x": 0.0, "y": 0.0, "length": 1.0, "beam": 1.0, "height": 0.3}
+    hull0 = HullHydrostatics(2.54, 0.208, 0.0, 0.35, 0.265, twin_spacing=1.308, boxes=[flat])
+    hull1 = HullHydrostatics(2.54, 0.208, 0.0, 0.35, 0.265, twin_spacing=1.308, boxes=[dict(flat, bottom=0.10)])
+    eta = np.array([0.0, 0.0, 0.35 + 0.20, 0.0, 0.0, 0.0])            # hull bottom 0.20 m deep
+    pont = 1025 * 9.81 * 2 * 2.54 * 0.208 * 0.20
+    assert -hull0.buoyancy(eta, 0.0)[2] == pytest.approx(pont + 1025 * 9.81 * 1.0 * 0.20, rel=1e-9)
+    assert -hull1.buoyancy(eta, 0.0)[2] == pytest.approx(pont + 1025 * 9.81 * 1.0 * 0.10, rel=1e-9)   # only 0.10 m of the box wet
 
 
 def test_cockpit_toggle_off_scales_pontoons_to_hold_the_boat():
@@ -144,7 +158,9 @@ def test_cockpit_toggle_reaches_viewer_and_dashboard():
     from hydrofoil.params import resolve_cad_hull
     from hydrofoil.viewer import build_mjcf
     from hydrofoil import sim_server
-    m = mujoco.MjModel.from_xml_string(build_mjcf(resolve_cad_hull(dict(CAD_PARAMS, cockpit_buoyancy=False))))
+    off = resolve_cad_hull(dict(CAD_PARAMS, cockpit_buoyancy=False))
+    m = mujoco.MjModel.from_xml_string(build_mjcf(off))
     g = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_GEOM, "pontoon_0")
-    assert m.geom_size[g][0] == pytest.approx(0.5 * 0.3672, abs=2e-3)
+    assert off["max_draft"] > CAD_PARAMS["pontoon_diameter"]                   # scaled up to hold the boat
+    assert m.geom_size[g][0] == pytest.approx(0.5 * off["max_draft"], abs=2e-3)
     assert 'name="cockpit_buoyancy"' in sim_server.page()

@@ -192,11 +192,17 @@ MANNED_PARAMS.update({
 # MEASURED from CAD: wing/elevator geometry and positions, NACA 0009 sections (9.0 % thick), 0 deg mounting on
 # both wings, flap notch (inboard 0-240 mm each side, 100 mm of the 300 mm chord), two front masts at +-0.35 m,
 # one rear mast, twin pontoons, propeller position.
-# ASSUMED (not in the STL, which has no mass): mass 275 kg and inertias (manned preset), CG longitudinally over the
-# main wing's quarter chord and 0.35 m above the pontoon bottoms, elevator pivot and both surfaces' travel limits.
-# Body frame origin = CG. CAD -> body: x = (X_cad - 1716) mm forward, z_down = (863 - Y_cad) mm.
+# MASS (2026-11-26, SolidWorks mass properties, rough): every structural part 6061 aluminium, pontoons hollow HDPE
+# (6 mm wall), original cockpit in aluminium, motors 7 lb and propellers 2 lb each (mass overrides), a 50 lb battery
+# placeholder block just behind the rear cross beam: 247.6 kg. Plus 35 lb (15.9 kg) of actuators, cables and cockpit
+# fit-out (not drawn; spread like the boat, so the boat's CG stays put) and a 150 lb driver (not in the CAD, ASSUMED
+# seated mid-cockpit 0.25 m above its floor) = 331.6 kg (731 lb), CG 0.577 m behind the main wing's quarter chord and
+# 0.103 m above the pontoon bottoms (CAD X 1.139, Y 0.616 m). Inertias about that CG from SolidWorks + the driver (products of
+# inertia, Ixz ~ -25 kg m^2, ignored). Still ASSUMED: elevator pivot and both surfaces' travel limits.
+# Body frame origin = CG. CAD -> body: x = (X_cad - 1139) mm forward, z_down = (616 - Y_cad) mm.
 CAD_PARAMS: dict[str, Any] = dict(MANNED_PARAMS)
 CAD_PARAMS.update({
+    "mass": 331.6, "ixx": 83.4, "iyy": 212.9, "izz": 203.1,
     "visual": "cad",                       # viewer draws the CAD layout (hydrofoil/cad_geometry.py)
     # Main wing: 1.353 m span, 0.3665 m^2 with the flaps in, AR 5.0, rounded tips. Each half is modelled as one
     # rectangular strip of the same area (0.6765 m x 0.271 m mean chord) whose lift acts at the half's area
@@ -208,22 +214,24 @@ CAD_PARAMS.update({
     # the half's centroid, which cuts roll authority to about 0.39x of a centred flap.
     "main_flap_frac": 0.333, "main_flap_span_frac": 0.355, "main_flap_setback": 0.0, "main_flap_center_y": 0.12,
     "tuned_for": {"main_flap_frac": 0.25, "main_flap_span_frac": 1.0, "main_flap_setback": 0.15, "gear_ratio": 20.0},
-    # Positions relative to the CG: wing quarter chord 1.099 m below, elevator quarter chord 2.391 m aft and 1.118 m
-    # below (0.149 x 0.677 m, all-moving). Hull bottom 0.35 m below the CG, so the struts are 0.749 m long.
-    "main_pos_x": 0.0, "main_pos_z": 1.099,
-    "elev_chord": 0.149, "elev_span": 0.677, "elev_pos_x": -2.391, "elev_pos_z": 1.118,
+    # Positions relative to the CG: wing quarter chord 0.577 m ahead and 0.852 m below, elevator quarter chord 1.814 m
+    # aft and 0.871 m below (2.391 m behind the main wing; 0.149 x 0.677 m, all-moving). Hull bottom 0.103 m below the
+    # CG, so the struts are 0.749 m long. In level flight the rear wing carries about 24 % of the weight.
+    "main_pos_x": 0.577, "main_pos_z": 0.852,
+    "elev_chord": 0.149, "elev_span": 0.677, "elev_pos_x": -1.814, "elev_pos_z": 0.871,
     "elev_pivot_frac": 0.22,               # PLACEHOLDER: the rear mast sits at 49 % chord; pivot not drawn yet
     # Two streamlined front masts (0.28 m chord, 51 mm thick) at +-0.35 m, one 0.10 m rear mast on the centreline.
     "main_strut_chord": 0.28, "main_strut_count": 2, "main_strut_y": 0.35, "elev_strut_chord": 0.10,
-    # Twin pontoons: 2.54 m long, 265 mm diameter, 1.308 m apart, centred 0.483 m aft of the CG. Modelled as
+    # Twin pontoons: 2.54 m long, 265 mm diameter, 1.308 m apart, centred 0.094 m ahead of the CG. Modelled as
     # wall-sided hulls of equal volume (beam = pi/4 x diameter) with the full diameter as draft; hull_beam,
     # max_draft and hull_boxes are filled in by resolve_cad_hull() below.
-    "hull_offset": -0.35, "hull_length": 2.54, "hull_twin_spacing": 1.308, "hull_x": -0.483,
+    "hull_offset": -0.103, "hull_length": 2.54, "hull_twin_spacing": 1.308, "hull_x": 0.094,
     "pontoon_diameter": 0.265,
-    # Cockpit: a sealed 48 x 32 x 24 in box (1.219 x 0.813 x 0.610 m, 0.605 m^3, ~620 kg of buoyancy when fully
-    # under) centred in the frame between the pontoons, its bottom level with the pontoon bottoms. 1.219 m along the
-    # boat. Its water drag is a flat-faced box (C_D 1) on whatever is submerged.
-    "cockpit_box": {"name": "cockpit", "x": -0.347, "y": 0.0, "length": 1.219, "beam": 0.813, "height": 0.610},
+    # Cockpit: the CAD's own aluminium tub, filling the frame between the cross and side beams: 1.405 m long, 0.705 m
+    # wide, 0.319 m deep (0.316 m^3, ~324 kg of buoyancy when fully under), its bottom 0.101 m above the pontoon
+    # bottoms, centred 0.229 m ahead of the CG. Its water drag is a flat-faced box (C_D 1) on whatever is submerged.
+    "cockpit_box": {"name": "cockpit", "x": 0.229, "y": 0.0, "length": 1.405, "beam": 0.705, "height": 0.319,
+                    "bottom": 0.101},
     # Toggle (dashboard "Cockpit box buoyancy"): True = the box floats (and drags) as above. False = the box is out of
     # the water calculation and the pontoon DIAMETER is scaled so the pontoons alone hold the boat with
     # pontoon_reserve x its weight when fully under (2.0 = floats with the pontoons about half under, a common
@@ -231,16 +239,19 @@ CAD_PARAMS.update({
     "cockpit_buoyancy": True, "pontoon_reserve": 2.0,
     # Wing 0.40 m (1.5 chords) under the surface when the pontoons are 0.35 m clear.
     "flying_height": 0.35,
-    # Two propellers (about 0.21 m diameter) on the front masts, 0.386 m aft of and 0.96 m below the CG: the thrust
-    # line pitches the nose up by thrust x 0.96 m. The sim applies the total thrust on the centreline.
-    "prop_pos_z": 0.96, "prop_count": 2,
-    "default_payloads": [{"name": "Rider", "mass": 75.0, "x": -0.35, "y": 0.0, "z": 0.0}],
+    # Two propellers (about 0.21 m diameter) on the front masts, 0.19 m ahead of and 0.713 m below the CG: the thrust
+    # line pitches the nose up by thrust x 0.713 m. The sim applies the total thrust on the centreline.
+    "prop_pos_z": 0.713, "prop_count": 2,
+    # Already inside the 331.6 kg (the boat editor can move or change them): the 150 lb driver and the 50 lb battery.
+    "default_payloads": [{"name": "Rider", "mass": 68.04, "x": 0.061, "y": 0.0, "z": 0.254},
+                         {"name": "Battery", "mass": 22.68, "x": -0.725, "y": 0.0, "z": 0.232}],
     # Cruise target: the team's planned 8 m/s (as the manned sizing). NOT tuned to make this geometry fly.
     "target_speed": 8.0,
-    # Trim schedule DERIVED for the 0 deg wing by hydrofoil.design._reschedule (flap inside +-15 deg): level flight
-    # first trims at 15.5 m/s, so the LQR only exists there. Re-derived live when the mounting angle changes.
-    "lqr_speeds": (15.5, 15.62, 15.75, 15.88, 16.0), "lqr_engage_speed": 15.8, "est_engage_speed": 15.5,
-    "trim_ff_deg": 13.54, "trim_ff_speed": 16.0,
+    # Trim schedule DERIVED for the 0 deg wing by hydrofoil.design._reschedule (flap inside +-15 deg) at 331.6 kg:
+    # level flight first trims at 14.5 m/s, so the LQR only exists there (3 deg: 9.0 m/s, 5 deg: 7.5 m/s with the flap
+    # at +7 deg at 8 m/s). Re-derived live when the mounting angle changes.
+    "lqr_speeds": (14.5, 14.88, 15.25, 15.62, 16.0), "lqr_engage_speed": 14.8, "est_engage_speed": 14.5,
+    "trim_ff_deg": 13.10, "trim_ff_speed": 15.5,
 })
 
 def resolve_cad_hull(p: dict[str, Any]) -> dict[str, Any]:
